@@ -587,6 +587,8 @@ ui.make.addEventListener('click', async () => {
     }
     c.classList.add('on');
   } catch (e) { /* 띠는 없어도 됨 */ }
+  // 변환 도구까지 미리 받아 둠 → 페이지가 열린 뒤엔 인터넷이 끊겨도(비행기 모드) 만들 수 있음
+  try { await loadAssets(); await getEncoder(); } catch (e) { /* 사진 고를 때 다시 시도 */ }
 })();
 
 show(ui.stepPick);
