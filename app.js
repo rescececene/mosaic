@@ -1,7 +1,7 @@
 // 짤 모자이크 — 모든 계산은 이 기기 브라우저 안에서만 (사진은 어디에도 안 올라감)
 // dc-stats/mosaic_build.py · mosaic_assemble.py 를 그대로 옮김 (짤 고르기 · 색 맞추기 · 모이는 연출)
 // 여러 모양(카드섹션 · 슬롯머신 · 변신 · 무한 줌 · 크기가 다른 짤 · 벌집)은 patterns.js
-import { makePatterns } from './patterns.js?v=20261122b';   // 고치면 index.html 의 app.js?v= 와 같이 바꿈
+import { makePatterns } from './patterns.js?v=20261122c';   // 고치면 index.html 의 app.js?v= 와 같이 바꿈
 
 const CFG = {
   SHIFT: 0.45, OVERLAY: 0.22, NEAR: 4, REUSE: 6.0,          // 짤 고르기 · 색 맞추기 (파이썬과 같음)
@@ -527,7 +527,7 @@ const ui = {
 let photo = null, focus = null, busy = false, lastURL = null, prepP = null, token = 0;
 const QP = new URLSearchParams(location.search);            // ?pattern=cards 로 모양을 미리 고를 수 있음 · ?focus=0.34,0.25 는 시험용
 
-// 모양 고르기 (벌집은 11-22 사용자 요청으로 화면에서 뺌 — patterns.js 에는 남겨 둠)
+// 모양 고르기 (벌집은 11-22 사용자 요청으로 화면에서 뺌 · 그림 느낌은 시안만 — patterns.js 에는 남겨 둠)
 const KINDS = [
   { key: 'assemble', name: '모이기', desc: '짤이 사방에서 날아와 모여요', box: true, estT: CFG.T_END, hint: '점선 네모 안에서 시작해서 짤이 모이며 전체 사진이 돼요.' },
   { key: 'cards', name: '카드섹션', desc: '얼굴부터 카드가 차례로 뒤집혀요', box: true, estT: CFG.T_END, hint: '점선 네모 안, 누른 곳부터 카드가 뒤집히며 전체 사진이 돼요.' },
@@ -535,8 +535,11 @@ const KINDS = [
   { key: 'morph', name: '변신', desc: '색깔별로 놓인 짤이 사진이 돼요', box: false, estT: 4.7, hint: '색깔별로 놓인 짤이 누른 곳부터 제자리를 찾아가요.' },
   { key: 'droste', name: '무한 줌', desc: '사진 속 작은 사진으로 계속 들어가요', box: false, estT: 6.2, hint: '누른 곳은 가리지 않게 구석에 작은 사진을 넣어요.' },
   { key: 'quad', name: '크기가 다른 짤', desc: '큰 짤이 쪼개지며 또렷해져요', box: false, estT: 4.2, hint: '누른 곳 둘레는 작은 짤로 또렷하게 만들어요.' },
+  { key: 'sketch', name: '그려지기', desc: '연필 스케치에 짤로 색칠해요', box: false, estT: 5.7, hint: '누른 곳부터 연필 선이 그려지고, 그 위에 짤로 색칠돼요.' },
 ];
-let kind = KINDS.find((k) => k.key === QP.get('pattern')) || KINDS[0];
+const qpKey = QP.get('pattern');                              // 화면에 없는 모양(시험 중 · 벌집)도 주소로는 열림
+let kind = KINDS.find((k) => k.key === qpKey)
+  || (PATTERNS[qpKey] ? { key: qpKey, name: PATTERNS[qpKey].name, desc: '', box: false, estT: CFG.T_END, hint: '시험 중인 모양이에요.' } : KINDS[0]);
 let lastPrep = null;
 function guessText(p) {                                      // 모양마다 장수가 달라서 '움짤 만들기' 몫만 고쳐서 어림
   const total = p.total + p.est.frames * (kind.estT / CFG.T_END - 1);

@@ -23,6 +23,44 @@ export function makePatterns(H) {
   function roundRect(x, X, Y, W, Hh, r) { x.beginPath(); if (x.roundRect) x.roundRect(X, Y, W, Hh, r); else x.rect(X, Y, W, Hh); }
   function hexAdd(x, X, Y, rad) { for (let k = 0; k < 6; k++) { const a = PI / 6 + k * PI / 3, px = X + rad * Math.cos(a), py = Y + rad * Math.sin(a); if (k) x.lineTo(px, py); else x.moveTo(px, py); } x.closePath(); }
   function hexPath(x, X, Y, rad) { x.beginPath(); hexAdd(x, X, Y, rad); }
+  // 흐리게 (상자 흐림 세 번 ≈ 가우시안) — 사파리는 캔버스 filter 를 못 써서 직접
+  function boxBlur(src, w, h, r) {
+    const a = Float32Array.from(src), b = new Float32Array(src.length), k = 1 / (2 * r + 1);
+    for (let pass = 0; pass < 3; pass++) {
+      for (let y = 0; y < h; y++) {
+        const o = y * w; let acc = 0;
+        for (let x = -r; x <= r; x++) acc += a[o + clamp(x, 0, w - 1)];
+        for (let x = 0; x < w; x++) { b[o + x] = acc * k; acc += a[o + Math.min(w - 1, x + r + 1)] - a[o + Math.max(0, x - r)]; }
+      }
+      for (let x = 0; x < w; x++) {
+        let acc = 0;
+        for (let y = -r; y <= r; y++) acc += b[clamp(y, 0, h - 1) * w + x];
+        for (let y = 0; y < h; y++) { a[y * w + x] = acc * k; acc += b[Math.min(h - 1, y + r + 1) * w + x] - b[Math.max(0, y - r) * w + x]; }
+      }
+    }
+    return a;
+  }
+  // 부드러운 얼룩 무늬 (0~1) — 칸 크기 cell 픽셀
+  function smoothNoise(w, h, cell, seed) {
+    const gw = Math.ceil(w / cell) + 2, gh = Math.ceil(h / cell) + 2, g = new Float32Array(gw * gh), rnd = mulberry32(seed), out = new Float32Array(w * h);
+    for (let i = 0; i < g.length; i++) g[i] = rnd();
+    for (let y = 0; y < h; y++) {
+      const fy = y / cell, y0 = fy | 0, ty = fy - y0, sy = ty * ty * (3 - 2 * ty);
+      for (let x = 0; x < w; x++) {
+        const fx = x / cell, x0 = fx | 0, tx = fx - x0, sx = tx * tx * (3 - 2 * tx), i = y0 * gw + x0;
+        out[y * w + x] = (g[i] * (1 - sx) + g[i + 1] * sx) * (1 - sy) + (g[i + gw] * (1 - sx) + g[i + gw + 1] * sx) * sy;
+      }
+    }
+    return out;
+  }
+  function grayOf(img, w, h) {                               // 사진 → 화면 크기 회색 (0~255) + RGB
+    const c = canvas(w, h), x = c.getContext('2d', { willReadFrequently: true });
+    x.imageSmoothingQuality = 'high'; x.drawImage(img, 0, 0, w, h);
+    const d = x.getImageData(0, 0, w, h).data, g = new Float32Array(w * h);
+    for (let i = 0; i < w * h; i++) g[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
+    free(c);
+    return [g, d];
+  }
   // 칸마다 채워지는 시각: 얼굴에서 동그랗게 번지는 물결(점점 빨라짐)과, 화면이 그 칸에 닿는 시각 중 늦은 쪽 (+ 흔들림)
   function landTimes(P, L, xs, ys, focus, seed) {
     const STEPS = 600, reach = [], aspect = L.VW / L.VH, N = xs.length, land = new Float32Array(N), rl = mulberry32(seed);
@@ -490,5 +528,172 @@ export function makePatterns(H) {
     },
   };
 
-  return { assemble, cards, slot, morph, droste, quad, hex };
+  // ── 그려지기: 연필 스케치가 얼굴부터 그려지고, 그 위에 짤이 색칠하듯 번져서 사진이 됨 (완성본에 연필 선이 살짝 남음)
+  const sketch = {
+    name: '그려지기',
+    make(c) {
+      const { L, T, mos, photo } = c, { cols, rows, VW, VH } = L, P = VW * VH, N = cols * rows;
+      const [frame, fx] = frameCanvas(L);
+      // 연필 그림: 회색 ÷ (1 − 흐린 반전) (흔한 연필 스케치 방식) → 선을 조금 진하게
+      const [gray] = grayOf(photo, VW, VH);
+      const inv = new Float32Array(P); for (let i = 0; i < P; i++) inv[i] = 255 - gray[i];
+      const bl = boxBlur(inv, VW, VH, Math.max(3, Math.round(VW / 110)));
+      const pencil = new Float32Array(P);
+      for (let i = 0; i < P; i++) { const den = 255 - bl[i], v = den <= 1 ? 255 : Math.min(255, gray[i] * 255 / den); pencil[i] = 255 * Math.pow(v / 255, 2.4); }
+      // 선이 그려지는 시각: 얼굴에서 멀수록 늦게 + 얼룩 (조각조각 그려지는 느낌)
+      const fpx = c.focus[0] / L.Wm * VW, fpy = c.focus[1] / L.Hm * VH;
+      let dmax = 1; for (const [x, y] of [[0, 0], [VW, 0], [0, VH], [VW, VH]]) dmax = Math.max(dmax, Math.hypot(x - fpx, y - fpy));
+      const nz = smoothNoise(VW, VH, Math.max(18, Math.round(VW / 22)), 51), S0 = 0.15, S1 = 2.3, FADE = 0.3, tau = new Float32Array(P);
+      for (let y = 0; y < VH; y++) for (let x = 0; x < VW; x++) { const i = y * VW + x; tau[i] = S0 + (S1 - S0 - FADE) * (0.75 * Math.pow(Math.hypot(x - fpx, y - fpy) / dmax, 0.8) + 0.25 * nz[i]); }
+      const paper = canvas(VW, VH), ppx = paper.getContext('2d'), pimg = ppx.createImageData(VW, VH), pdd = pimg.data;
+      let paperT = -1;
+      function drawPaper(t) {                                   // t 까지 그려진 연필 선
+        const tt = Math.min(t, S1 + 0.01);
+        if (tt === paperT) return;
+        paperT = tt;
+        for (let i = 0, o = 0; i < P; i++, o += 4) { const a = clamp((tt - tau[i]) / FADE, 0, 1), v = 255 - (255 - pencil[i]) * a; pdd[o] = pdd[o + 1] = pdd[o + 2] = v; pdd[o + 3] = 255; }
+        ppx.putImageData(pimg, 0, 0);
+      }
+      // 색칠할 그림: 짤 모자이크(화면 크기)에 연필 선을 살짝 겹침
+      const mosL = pyramid(mos, T, false), k0 = levelFor(mosL, L.Wm, VW);
+      const col = canvas(VW, VH), cx = col.getContext('2d', { willReadFrequently: true });
+      cx.imageSmoothingQuality = 'high'; cx.drawImage(mosL[k0], 0, 0, VW, VH);
+      const ci = cx.getImageData(0, 0, VW, VH), cd = ci.data;
+      for (let i = 0, o = 0; i < P; i++, o += 4) { const m = 1 - 0.28 * (1 - pencil[i] / 255); cd[o] *= m; cd[o + 1] *= m; cd[o + 2] *= m; }
+      cx.putImageData(ci, 0, 0);
+      free(...levelsOf(mosL).filter((k) => k > 1).map((k) => mosL[k]));
+      // 칸마다 색칠되는 시각: 얼굴부터, 얼룩지게
+      const cnz = smoothNoise(cols, rows, 4, 77), C0 = 2.0, C1 = 5.6, CF = 0.4, rho = new Float32Array(N);
+      for (let i = 0; i < N; i++) { const x = ((i % cols) + 0.5) * VW / cols, y = (((i / cols) | 0) + 0.5) * VH / rows; rho[i] = C0 + (C1 - C0 - CF) * (0.7 * Math.pow(Math.hypot(x - fpx, y - fpy) / dmax, 0.8) + 0.3 * cnz[i]); }
+      const order = Array.from({ length: N }, (_, i) => i).sort((a, b) => rho[a] - rho[b]);
+      const rect = (i) => { const q = i % cols, r = (i / cols) | 0, x0 = Math.floor(q * VW / cols), y0 = Math.floor(r * VH / rows); return [x0, y0, Math.floor((q + 1) * VW / cols) - x0, Math.floor((r + 1) * VH / rows) - y0]; };
+      const done = canvas(VW, VH), dx = done.getContext('2d');
+      let ptr = 0;
+      function reset() { ptr = 0; dx.clearRect(0, 0, VW, VH); paperT = -1; }
+      function render(t) {
+        drawPaper(t);
+        while (ptr < N && rho[order[ptr]] + CF <= t) { const [x, y, w, h] = rect(order[ptr++]); dx.drawImage(col, x, y, w, h, x, y, w, h); }
+        fx.drawImage(paper, 0, 0); fx.drawImage(done, 0, 0);
+        for (let j = ptr; j < N && rho[order[j]] <= t; j++) {   // 번지는 중인 칸
+          const i = order[j], a = (t - rho[i]) / CF; if (a <= 0) continue;
+          const [x, y, w, h] = rect(i);
+          fx.globalAlpha = Math.min(1, a); fx.drawImage(col, x, y, w, h, x, y, w, h);
+        }
+        fx.globalAlpha = 1;
+        return frame;
+      }
+      reset();
+      return { T_END: C1 + 0.1, render, reset, finalFrame: () => render(C1 + 1), dispose: () => free(frame, paper, col, done) };
+    },
+  };
+
+  // ── 그림 느낌: 짤을 붓 자국 모양으로 잘라 사진 결을 따라 칠함 (큰 붓 → 중간 붓 → 작은 붓, 얼굴부터)
+  const paint = {
+    name: '그림 느낌', layout: true,
+    async make(c) {
+      const { A, L, photo, tr } = c, { VW, VH } = L, P = VW * VH, T = A.T, per = A.PER * A.PER, U = VW / 800;
+      const [gray] = grayOf(photo, VW, VH);
+      const sl = boxBlur(gray, VW, VH, 2), mag = new Float32Array(P), c2 = new Float32Array(P), s2 = new Float32Array(P);
+      for (let y = 1; y < VH - 1; y++) for (let x = 1; x < VW - 1; x++) {   // 밝기 결 (소벨) → 붓 방향은 결을 따라
+        const i = y * VW + x;
+        const gx = (sl[i - VW + 1] + 2 * sl[i + 1] + sl[i + VW + 1]) - (sl[i - VW - 1] + 2 * sl[i - 1] + sl[i + VW - 1]);
+        const gy = (sl[i + VW - 1] + 2 * sl[i + VW] + sl[i + VW + 1]) - (sl[i - VW - 1] + 2 * sl[i - VW] + sl[i - VW + 1]);
+        const m = Math.hypot(gx, gy), a = Math.atan2(gy, gx);
+        mag[i] = m; c2[i] = m * Math.cos(2 * a); s2[i] = m * Math.sin(2 * a);
+      }
+      tr.tick(0.15); await sleep0();
+      const detail = boxBlur(mag, VW, VH, Math.max(3, Math.round(VW / 60))), C2 = boxBlur(c2, VW, VH, 5), S2 = boxBlur(s2, VW, VH, 5);
+      tr.tick(0.35); await sleep0();
+      function smallOf(s) {                                     // 붓 크기만큼 뭉갠 사진 색
+        const w = Math.max(2, Math.round(VW / s)), h = Math.max(2, Math.round(VH / s)), cv = canvas(w, h), x = cv.getContext('2d', { willReadFrequently: true });
+        x.imageSmoothingQuality = 'high'; x.drawImage(photo, 0, 0, w, h);
+        const d = x.getImageData(0, 0, w, h).data; free(cv);
+        return (X, Y) => { const o = (clamp((Y / s) | 0, 0, h - 1) * w + clamp((X / s) | 0, 0, w - 1)) * 4; return [d[o], d[o + 1], d[o + 2]]; };
+      }
+      const B = 8, bucket = Array.from({ length: B * B * B }, () => []);   // 짤을 평균 색으로 나눠 둠
+      for (let t = 0; t < A.n; t++) bucket[((A.mean[t * 3] / 32) | 0) * 64 + ((A.mean[t * 3 + 1] / 32) | 0) * 8 + ((A.mean[t * 3 + 2] / 32) | 0)].push(t);
+      function pickTile(rgb, rnd) {
+        const br = (rgb[0] / 32) | 0, bg = (rgb[1] / 32) | 0, bb = (rgb[2] / 32) | 0, cand = [];
+        for (let rad = 0; rad < B && cand.length < 10; rad++)
+          for (let r = br - rad; r <= br + rad; r++) for (let g = bg - rad; g <= bg + rad; g++) for (let b = bb - rad; b <= bb + rad; b++) {
+            if (r < 0 || g < 0 || b < 0 || r >= B || g >= B || b >= B || Math.max(Math.abs(r - br), Math.abs(g - bg), Math.abs(b - bb)) !== rad) continue;
+            const bk = bucket[r * 64 + g * 8 + b]; for (let k = 0; k < bk.length; k++) cand.push(bk[k]);
+          }
+        return cand.length ? cand[Math.floor(rnd() * cand.length)] : Math.floor(rnd() * A.n);
+      }
+      const fpx = c.focus[0] / L.Wm * VW, fpy = c.focus[1] / L.Hm * VH;
+      let dmax = 1; for (const [x, y] of [[0, 0], [VW, 0], [0, VH], [VW, VH]]) dmax = Math.max(dmax, Math.hypot(x - fpx, y - fpy));
+      const LAY = [                                             // 붓 굵기 · 길이 배수 · 간격 · 칠할 곳 비율 · 얼굴 둘레 · 짤 무늬 진하기 · 칠하는 때
+        { w: 26 * U, len: 2.1, step: 15 * U, frac: 1.0, face: 0, mix: 0.5, t0: 0.2, t1: 2.3 },
+        { w: 13 * U, len: 2.3, step: 8 * U, frac: 0.45, face: 0.2, mix: 0.45, t0: 1.9, t1: 3.7 },
+        { w: 6 * U, len: 2.6, step: 4 * U, frac: 0.22, face: 0.15, mix: 0.3, t0: 3.1, t1: 4.8 },
+        { w: 3.2 * U, len: 2.8, step: 2.5 * U, frac: 0.07, face: 0.08, mix: 0, t0: 4.2, t1: 5.4 },   // 눈·코·입 윤곽
+      ];
+      const rnd = mulberry32(61), strokes = [], FADE = 0.14;
+      LAY.forEach((ly, li) => {
+        const colorAt = smallOf(Math.max(2, ly.w * 0.7)), pts = [];
+        for (let y = ly.step / 2; y < VH; y += ly.step) for (let x = ly.step / 2; x < VW; x += ly.step) {
+          const X = clamp(x + (rnd() - 0.5) * ly.step, 0, VW - 1), Y = clamp(y + (rnd() - 0.5) * ly.step, 0, VH - 1);
+          pts.push([X, Y, detail[(Y | 0) * VW + (X | 0)]]);
+        }
+        const th = ly.frac >= 1 ? -1 : pts.map((p) => p[2]).sort((a, b) => a - b)[Math.floor(pts.length * (1 - ly.frac))];
+        const faceR = ly.face * dmax;
+        for (const [X, Y, dt] of pts) {
+          const df = Math.hypot(X - fpx, Y - fpy);
+          if (ly.frac < 1 && dt < th && df > faceR) continue;
+          const i = (Y | 0) * VW + (X | 0), strong = Math.hypot(C2[i], S2[i]);
+          const thA = strong > 4 ? 0.5 * Math.atan2(S2[i], C2[i]) + PI / 2 + (rnd() - 0.5) * 0.25 : 0.6 + (rnd() - 0.5) * 0.9;
+          const w = ly.w * (0.8 + rnd() * 0.4), l = w * ly.len * (0.8 + rnd() * 0.4), rgb = colorAt(X, Y);
+          const t0 = ly.t0 + (ly.t1 - ly.t0 - FADE) * (0.75 * Math.pow(df / dmax, 0.8) + 0.25 * rnd());
+          strokes.push({ x: X, y: Y, th: thA, w, l, rgb, mix: ly.mix, tile: ly.mix > 0 ? pickTile(rgb, rnd) : -1, t0 });
+        }
+      });
+      strokes.sort((a, b) => a.t0 - b.t0);
+      tr.stage('compose', '붓질 준비하는 중…'); await sleep0();
+      // 붓 자국 모양 (가장자리는 부드럽게, 결 무늬)
+      const BW = 64, BH = 32, BM = canvas(BW, BH), bmx = BM.getContext('2d'), md = bmx.createImageData(BW, BH), rb = mulberry32(5);
+      const bristle = Array.from({ length: BH }, () => 0.72 + rb() * 0.28);
+      for (let y = 0; y < BH; y++) for (let x = 0; x < BW; x++) {
+        const u = (x + 0.5) / BW * 2 - 1, v = (y + 0.5) / BH * 2 - 1;
+        const a = clamp((1 - Math.pow(Math.abs(v), 3)) * (1 - Math.pow(Math.abs(u), 6)) * bristle[y] * (0.85 + 0.15 * rb()), 0, 1);
+        md.data[(y * BW + x) * 4 + 3] = Math.round(a * 255);
+      }
+      bmx.putImageData(md, 0, 0);
+      function texOf(s) {                                       // 붓 한 번: 사진 색 반 + 짤 반, 붓 모양으로 자름
+        const w = Math.max(2, Math.ceil(s.l)), h = Math.max(2, Math.ceil(s.w)), cv = canvas(w, h), x = cv.getContext('2d');
+        x.fillStyle = `rgb(${s.rgb[0]},${s.rgb[1]},${s.rgb[2]})`; x.fillRect(0, 0, w, h);
+        if (s.tile >= 0) {
+          const t = s.tile, im = A.sheets[(t / per) | 0], k = t % per, sh = T * h / w;
+          x.globalAlpha = s.mix; x.drawImage(im, (k % A.PER) * T, ((k / A.PER) | 0) * T + (T - sh) / 2, T, sh, 0, 0, w, h); x.globalAlpha = 1;
+        }
+        x.globalCompositeOperation = 'destination-in'; x.drawImage(BM, 0, 0, w, h); x.globalCompositeOperation = 'source-over';
+        return cv;
+      }
+      const [frame, fx] = frameCanvas(L);
+      const paperC = canvas(VW, VH), pg = paperC.getContext('2d'), gi = pg.createImageData(VW, VH), rg = mulberry32(9);   // 종이 결
+      for (let i = 0; i < P; i++) { const v = 250 + Math.round(rg() * 5); gi.data[i * 4] = v; gi.data[i * 4 + 1] = v; gi.data[i * 4 + 2] = v - 1; gi.data[i * 4 + 3] = 255; }
+      pg.putImageData(gi, 0, 0);
+      const pc = canvas(VW, VH), px = pc.getContext('2d'), live = new Map(), ALPHA = 0.92;
+      let ptr = 0;
+      const put = (ctx, s, tex, a) => { ctx.save(); ctx.globalAlpha = a; ctx.translate(s.x, s.y); ctx.rotate(s.th); ctx.drawImage(tex, -tex.width / 2, -tex.height / 2); ctx.restore(); };
+      function reset() { ptr = 0; for (const tx of live.values()) free(tx); live.clear(); px.drawImage(paperC, 0, 0); }
+      function render(t) {
+        while (ptr < strokes.length && strokes[ptr].t0 + FADE <= t) {   // 다 칠한 붓질은 그림에 붙임
+          const s = strokes[ptr], tex = live.get(ptr) || texOf(s);
+          put(px, s, tex, ALPHA); live.delete(ptr); free(tex); ptr++;
+        }
+        fx.drawImage(pc, 0, 0);
+        for (let j = ptr; j < strokes.length && strokes[j].t0 <= t; j++) {   // 칠하는 중
+          const s = strokes[j]; let tex = live.get(j); if (!tex) { tex = texOf(s); live.set(j, tex); }
+          put(fx, s, tex, ALPHA * clamp((t - s.t0) / FADE, 0, 1));
+        }
+        return frame;
+      }
+      reset();
+      const T_END = (strokes.length ? strokes[strokes.length - 1].t0 : 0) + FADE + 0.1;
+      return { T_END, render, reset, finalFrame: () => render(T_END + 1), dispose: () => { for (const tx of live.values()) free(tx); free(frame, paperC, pc, BM); } };
+    },
+  };
+
+  return { assemble, cards, slot, morph, droste, quad, hex, sketch, paint };
 }
