@@ -1,5 +1,7 @@
 // 짤 모자이크 — 모든 계산은 이 기기 브라우저 안에서만 (사진은 어디에도 안 올라감)
 // dc-stats/mosaic_build.py · mosaic_assemble.py 를 그대로 옮김 (짤 고르기 · 색 맞추기 · 모이는 연출)
+// 여러 모양(카드섹션 · 슬롯머신 · 변신 · 무한 줌 · 크기가 다른 짤 · 벌집)은 patterns.js
+import { makePatterns } from './patterns.js';
 
 const CFG = {
   SHIFT: 0.45, OVERLAY: 0.22, NEAR: 4, REUSE: 6.0,          // 짤 고르기 · 색 맞추기 (파이썬과 같음)
@@ -120,7 +122,7 @@ function cellsOf(photo, L) {
       mean[cell * 3] += small[o] / 9; mean[cell * 3 + 1] += small[o + 1] / 9; mean[cell * 3 + 2] += small[o + 2] / 9;
     }
   }
-  return { feat, mean };
+  return { feat, mean, small };                             // small: 사진을 칸당 3×3 으로 줄인 것 (크기가 다른 짤 · 벌집이 씀)
 }
 
 // 칸 하나에 가장 맞는 짤 (많이 쓴 짤은 점수 깎고, cap 번 넘으면 X, 가까운 칸에 있는 짤 X)
@@ -437,34 +439,49 @@ function makeTracker(est, show) {
   };
 }
 
+// ───────── 모양들 (patterns.js)
+const PATTERNS = makePatterns({ CFG, canvas, clamp, free, mulberry32, pyramid, drawClipped, makePlan, makeRenderer, labInto, bestTile, now, sleep0 });
+
 // ───────── 전체 흐름
-async function build(prep, focusPhoto, show) {
+async function build(prep, focusPhoto, show, opts = {}) {
   const t0 = now();
   const { A, L, cells, E, est } = prep;
-  const tr = makeTracker({ ...est }, show);
-  tr.stage('match', '칸마다 어울리는 짤 고르는 중…');
-  const grid = await match(cells.feat, A, L, (p) => tr.tick(p));
-  tr.stage('compose', '모자이크 그리는 중…');
-  const mos = await compose(A, grid, L, prep.photo, cells.mean, (p) => tr.tick(p));
-  tr.stage('prep', '움짤 준비하는 중…');
-  await sleep0();
+  const spec = PATTERNS[opts.pattern] || PATTERNS.assemble;
+  const tr = makeTracker({ ...est, frames: est.frames * (opts.estT || CFG.T_END) / CFG.T_END }, show);
   const focus = [focusPhoto[0] * L.Wm / prep.photo.width, focusPhoto[1] * L.Hm / prep.photo.height];
-  const P = makePlan(L, A.T, focus);
-  const R = makeRenderer(L, A.T, mos, P);
-  const n = FRAMES, dt = Math.round(1000 / CFG.FPS);
+  const ctx = { A, L, T: A.T, cells, photo: prep.photo, focus, text: opts.text, tr };
+  let mos = null, R;
+  tr.stage('match', '칸마다 어울리는 짤 고르는 중…');
+  if (spec.layout) R = await spec.make(ctx);               // 크기가 다른 짤 · 벌집: 스스로 짤 고르고 그림
+  else {
+    const grid = await match(cells.feat, A, L, (p) => tr.tick(p));
+    tr.stage('compose', '모자이크 그리는 중…');
+    mos = await compose(A, grid, L, prep.photo, cells.mean, (p) => tr.tick(p));
+    await sleep0();
+    R = spec.make({ ...ctx, mos, grid });
+  }
+  tr.stage('prep', '움짤 준비하는 중…');
+  const n = Math.floor(R.T_END * CFG.FPS) + 2, dt = Math.round(1000 / CFG.FPS);
   const holdN = Math.max(0, Math.round(CFG.HOLD * CFG.FPS) - 1);   // 끝 멈춤 = 마지막 장면 + 같은 간격의 짧은 장면 holdN장 (muxWebP 참고)
   const durs = new Array(n).fill(dt);
   try {
-    // 화질 고르기: 마지막 장면 크기로 전체 크기를 어림 (실제 평균은 마지막 장면의 약 0.75배)
+    // 화질 고르기: 끝 · 가운데 · 앞 장면 크기의 평균으로 전체 크기를 어림 (모양마다 장면 무게가 달라서 세 장)
     tr.stage('probe', '20MB 안에 들어가게 화질 맞추는 중…');
     let qi = 0;
     const lastF = R.finalFrame();
     const px = lastF.getContext('2d').getImageData(0, 0, 1, 1).data;   // 끝 멈춤 장면에 다시 칠할 왼쪽 위 점 색
-    for (; qi < QS.length - 1; qi++) {
-      const s = (await E.enc(lastF, QS[qi])).length;
-      tr.tick(0.5);
-      if (s * n * 0.8 <= CFG.LIMIT * 0.95) break;
+    const probes = [];
+    for (const tt of [R.T_END + 1, R.T_END * 0.55, R.T_END * 0.15]) {
+      R.reset();
+      const c2 = canvas(L.VW, L.VH); c2.getContext('2d', { alpha: false }).drawImage(R.render(tt), 0, 0); probes.push(c2);
     }
+    for (; qi < QS.length - 1; qi++) {
+      let s = 0;
+      for (const c2 of probes) s += (await E.enc(c2, QS[qi])).length;
+      tr.tick(0.5);
+      if (s / probes.length * n <= CFG.LIMIT * 0.95) break;
+    }
+    free(...probes);
     const dot = canvas(1, 1), dx = dot.getContext('2d', { alpha: false });
     dx.fillStyle = `rgb(${px[0]},${px[1]},${px[2]})`; dx.fillRect(0, 0, 1, 1);
     const hold = { data: await E.enc(dot, QS[0]), count: holdN, dur: dt };
@@ -489,7 +506,7 @@ async function build(prep, focusPhoto, show) {
         const blob = muxWebP(frames, L.VW, L.VH, durs, hold);
         tr.end();
         const r2 = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, +v.toFixed(2)]));
-        return { blob, w: L.VW, h: L.VH, frames: n + holdN, q, pass, enc: E.kind, cells: [L.cols, L.rows], sec: now() - t0, est: prep.total, times: r2(tr.times), ests: r2(est) };
+        return { blob, pattern: spec.name, w: L.VW, h: L.VH, frames: n + holdN, q, pass, enc: E.kind, cells: [L.cols, L.rows], sec: now() - t0, est: prep.total, times: r2(tr.times), ests: r2(est) };
       }
       if (qi >= QS.length - 1) throw new Error('20MB 안에 넣지 못했어요. 다른 사진으로 해 주세요.');
       qi = Math.min(QS.length - 1, qi + 2);                  // 넘으면 화질 낮춰 다시
@@ -505,8 +522,45 @@ const ui = {
   prev: $('#preview'), make: $('#make'), guess: $('#guess'), again1: $('#again1'), again2: $('#again2'),
   bar: $('#bar'), work: $('#work-text'), eta: $('#eta'),
   out: $('#result'), size: $('#size'), save: $('#save'), err: $('#err'),
+  kinds: $('#kinds'), hint: $('#hint'),
 };
 let photo = null, focus = null, busy = false, lastURL = null, prepP = null, token = 0;
+const QP = new URLSearchParams(location.search);            // ?pattern=cards 로 모양을 미리 고를 수 있음 · ?focus=0.34,0.25 는 시험용
+
+// 모양 고르기 (벌집은 11-22 사용자 요청으로 화면에서 뺌 — patterns.js 에는 남겨 둠)
+const KINDS = [
+  { key: 'assemble', name: '모이기', desc: '짤이 사방에서 날아와 모여요', box: true, estT: CFG.T_END, hint: '점선 네모 안에서 시작해서 짤이 모이며 전체 사진이 돼요.' },
+  { key: 'cards', name: '카드섹션', desc: '얼굴부터 카드가 차례로 뒤집혀요', box: true, estT: CFG.T_END, hint: '점선 네모 안, 누른 곳부터 카드가 뒤집히며 전체 사진이 돼요.' },
+  { key: 'slot', name: '슬롯머신', desc: '줄마다 돌다가 하나씩 멈춰요', box: true, estT: CFG.T_END, hint: '점선 네모 안, 누른 곳 쪽 줄부터 멈추며 전체 사진이 돼요.' },
+  { key: 'morph', name: '변신', desc: '색깔별로 놓인 짤이 사진이 돼요', box: false, estT: 4.7, hint: '색깔별로 놓인 짤이 누른 곳부터 제자리를 찾아가요.' },
+  { key: 'droste', name: '무한 줌', desc: '사진 속 작은 사진으로 계속 들어가요', box: false, estT: 6.2, hint: '누른 곳은 가리지 않게 구석에 작은 사진을 넣어요.' },
+  { key: 'quad', name: '크기가 다른 짤', desc: '큰 짤이 쪼개지며 또렷해져요', box: false, estT: 4.2, hint: '누른 곳 둘레는 작은 짤로 또렷하게 만들어요.' },
+];
+let kind = KINDS.find((k) => k.key === QP.get('pattern')) || KINDS[0];
+let lastPrep = null;
+function guessText(p) {                                      // 모양마다 장수가 달라서 '움짤 만들기' 몫만 고쳐서 어림
+  const total = p.total + p.est.frames * (kind.estT / CFG.T_END - 1);
+  return total < 10 ? '이 폰에서는 10초 안에 끝날 것 같아요' : `이 폰에서는 약 ${fmtSec(total)} 걸릴 것 같아요`;
+}
+function setKind(k) {
+  kind = k;
+  for (const el of ui.kinds.querySelectorAll('.kind')) { const on = el.dataset.key === k.key; el.classList.toggle('on', on); el.querySelector('input').checked = on; }
+  ui.hint.textContent = `${k.hint} 얼굴이 다른 곳에 있으면 얼굴을 눌러 주세요.`;
+  if (photo && !ui.stepAim.hidden) drawPreview();
+  if (lastPrep) ui.guess.textContent = guessText(lastPrep);
+}
+(function renderKinds() {
+  for (const k of KINDS) {
+    const lab = document.createElement('label'), inp = document.createElement('input'), nm = document.createElement('span'), ds = document.createElement('span');
+    lab.className = 'kind'; lab.dataset.key = k.key;
+    inp.type = 'radio'; inp.name = 'kind'; inp.value = k.key;
+    inp.addEventListener('change', () => { if (inp.checked) setKind(k); });
+    nm.className = 'kind-name'; nm.textContent = k.name;
+    ds.className = 'kind-desc'; ds.textContent = k.desc;
+    lab.append(inp, nm, ds); ui.kinds.append(lab);
+  }
+  setKind(kind);
+})();
 
 function show(step) { for (const s of [ui.stepPick, ui.stepAim, ui.stepWork, ui.stepDone]) s.hidden = s !== step; }
 function error(msg) { ui.err.textContent = msg; ui.err.hidden = !msg; }
@@ -528,8 +582,10 @@ function drawPreview() {
   const sb = startBox(L, T, [focus[0] / kx, focus[1] / ky]);
   x.save();
   x.lineWidth = 2 * dpr; x.strokeStyle = '#fff'; x.shadowColor = 'rgba(0,0,0,.6)'; x.shadowBlur = 4 * dpr;
-  x.setLineDash([6 * dpr, 5 * dpr]);
-  x.strokeRect((sb.x - sb.w0 / 2) * kx * s, (sb.y - sb.h0 / 2) * ky * s, sb.w0 * kx * s, sb.h0 * ky * s);
+  if (kind.box) {                                            // 점선 네모는 그 네모에서 시작하는 모양만
+    x.setLineDash([6 * dpr, 5 * dpr]);
+    x.strokeRect((sb.x - sb.w0 / 2) * kx * s, (sb.y - sb.h0 / 2) * ky * s, sb.w0 * kx * s, sb.h0 * ky * s);
+  }
   x.setLineDash([]); x.beginPath(); x.arc(focus[0] * s, focus[1] * s, 9 * dpr, 0, Math.PI * 2); x.stroke();
   x.restore();
 }
@@ -540,13 +596,15 @@ ui.file.addEventListener('change', async () => {
   const my = ++token;
   try { photo = await readPhoto(f); }
   catch (e) { error(e.message || '사진을 열 수 없어요.'); return; }
-  focus = [photo.width / 2, photo.height / 3];
+  const qf = (QP.get('focus') || '').split(',').map(Number);   // 시험용: ?focus=0.34,0.25 (사진 안 비율)
+  focus = qf.length === 2 && qf.every((v) => v >= 0 && v <= 1) ? [qf[0] * photo.width, qf[1] * photo.height] : [photo.width / 2, photo.height / 3];
   show(ui.stepAim); drawPreview();
   ui.guess.textContent = '이 폰에서 걸릴 시간 재는 중…';
   await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 30)));
   const ph = photo;
   prepP = prepare(ph).then((p) => { p.photo = ph; return p; });
-  prepP.then((p) => { if (my === token) ui.guess.textContent = p.total < 10 ? '이 폰에서는 10초 안에 끝날 것 같아요' : `이 폰에서는 약 ${fmtSec(p.total)} 걸릴 것 같아요`; })
+  lastPrep = null;
+  prepP.then((p) => { if (my === token) { lastPrep = p; ui.guess.textContent = guessText(p); } })
     .catch((e) => { if (my === token) { ui.guess.textContent = ''; error(e.message || '준비하다 멈췄어요.'); } });
 });
 ui.prev.addEventListener('click', (ev) => {
@@ -556,7 +614,7 @@ ui.prev.addEventListener('click', (ev) => {
 });
 window.addEventListener('resize', () => { if (photo && !ui.stepAim.hidden) drawPreview(); });
 
-function again() { if (busy) return; token++; ui.file.value = ''; photo = null; prepP = null; error(''); show(ui.stepPick); }
+function again() { if (busy) return; token++; ui.file.value = ''; photo = null; prepP = null; lastPrep = null; error(''); show(ui.stepPick); }
 ui.again1.addEventListener('click', again); ui.again2.addEventListener('click', again);
 
 ui.make.addEventListener('click', async () => {
@@ -571,14 +629,15 @@ ui.make.addEventListener('click', async () => {
   };
   try {
     const prep = await prepP;
-    const r = await build(prep, focus, showP);
+    const k = kind;
+    const r = await build(prep, focus, showP, { pattern: k.key, estT: k.estT });
     if (lastURL) URL.revokeObjectURL(lastURL);
     lastURL = URL.createObjectURL(r.blob);
     ui.out.src = lastURL; ui.out.width = r.w; ui.out.height = r.h;
     ui.size.textContent = `${(r.blob.size / 1e6).toFixed(1)}MB · ${r.w}×${r.h} · 디시에 그대로 올릴 수 있어요`;
     const d = new Date(), p2 = (v) => String(v).padStart(2, '0');
-    ui.save.href = lastURL; ui.save.download = `짤모자이크_${p2(d.getMonth() + 1)}${p2(d.getDate())}_${p2(d.getHours())}${p2(d.getMinutes())}.webp`;
-    window.__mosaic = { size: r.blob.size, w: r.w, h: r.h, frames: r.frames, q: r.q, pass: r.pass, enc: r.enc, cells: r.cells, sec: +r.sec.toFixed(1), est: +r.est.toFixed(1), times: r.times, ests: r.ests };
+    ui.save.href = lastURL; ui.save.download = `짤모자이크_${k.name.replace(/\s/g, '')}_${p2(d.getMonth() + 1)}${p2(d.getDate())}_${p2(d.getHours())}${p2(d.getMinutes())}.webp`;
+    window.__mosaic = { pattern: r.pattern, size: r.blob.size, w: r.w, h: r.h, frames: r.frames, q: r.q, pass: r.pass, enc: r.enc, cells: r.cells, sec: +r.sec.toFixed(1), est: +r.est.toFixed(1), times: r.times, ests: r.ests };
     show(ui.stepDone);
   } catch (e) {
     console.error(e);

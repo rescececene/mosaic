@@ -13,11 +13,11 @@
 <style>
   :root {
     --bg: #f6f7fa; --paper: #ffffff; --ink: #1c1e26; --sub: #5b6070; --line: #dde0e8;
-    --accent: #3b4890; --accent-ink: #ffffff; --track: #e6e8ef; --err: #b3261e;
+    --accent: #3b4890; --accent-ink: #ffffff; --track: #e6e8ef; --err: #b3261e; --pick: #eef0fa;
   }
   @media (prefers-color-scheme: dark) {
     :root { --bg: #14161b; --paper: #1c1f26; --ink: #eceef3; --sub: #a2a7b6; --line: #2d313b;
-            --accent: #8a98ee; --accent-ink: #10131c; --track: #2a2e38; --err: #ff8a80; }
+            --accent: #8a98ee; --accent-ink: #10131c; --track: #2a2e38; --err: #ff8a80; --pick: #232945; }
   }
   * { box-sizing: border-box; }
   html { -webkit-text-size-adjust: 100%; }
@@ -42,6 +42,17 @@
   .privacy p:last-child { margin-bottom: 0; }
   .privacy .privacy-head { color: var(--ink); font-size: 16px; font-weight: 700; margin-bottom: 6px; }
   .hint { margin: 14px 0 16px; font-size: 15px; color: var(--sub); }
+  .kinds { margin: 0 0 18px; padding: 0; border: 0; min-width: 0; }
+  .kinds legend { padding: 0; margin: 0 0 8px; font-size: 16px; font-weight: 700; }
+  .kind-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+  .kind { position: relative; display: block; padding: 10px 12px 11px; border: 1px solid var(--line); border-radius: 10px;
+          background: var(--paper); cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .kind input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; pointer-events: none; }
+  .kind-name { display: block; font-size: 16px; font-weight: 700; line-height: 1.35; }
+  .kind-desc { display: block; margin-top: 3px; font-size: 13.5px; line-height: 1.45; color: var(--sub); }
+  .kind.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: var(--pick); }
+  .kind.on .kind-name { color: var(--accent); }
+  .kind:has(input:focus-visible) { outline: 3px solid var(--ink); outline-offset: 2px; }
   .guess { margin: 10px 0 0; min-height: 1.6em; font-size: 15px; color: var(--sub); text-align: center; }
   .stage { display: flex; justify-content: center; margin: 0 0 18px; }
   #preview { display: block; max-width: 100%; border-radius: 6px; cursor: crosshair; touch-action: manipulation; }
@@ -64,7 +75,7 @@
 <canvas id="wall" aria-hidden="true"></canvas>
 <main>
   <h1>짤 모자이크</h1>
-  <p class="lead">사진 한 장을 고르면 컨갤 짤 5,885장이 날아와 그 사진을 만들어요. 디시에 바로 올릴 수 있는 움짤로 저장돼요.</p>
+  <p class="lead">사진 한 장을 고르면 컨갤 짤 5,885장이 그 사진을 만드는 움짤이 나와요. 짤이 모이는 모양은 여섯 가지 중에 고를 수 있고, 디시에 바로 올릴 수 있게 저장돼요.</p>
 
   <div class="privacy" role="note">
     <p class="privacy-head">사진은 서버에 올라가지 않아요</p>
@@ -79,7 +90,11 @@
 
   <section id="step-aim" hidden>
     <div class="stage"><canvas id="preview" tabindex="0" aria-label="사진 미리보기. 누른 곳부터 짤이 모여요"></canvas></div>
-    <p class="hint">점선 네모 안에서 시작해서 짤이 모이며 전체 사진이 돼요. 얼굴이 다른 곳에 있으면 얼굴을 눌러 주세요.</p>
+    <p class="hint" id="hint">점선 네모 안에서 시작해서 짤이 모이며 전체 사진이 돼요. 얼굴이 다른 곳에 있으면 얼굴을 눌러 주세요.</p>
+    <fieldset class="kinds">
+      <legend>어떻게 만들까요?</legend>
+      <div class="kind-grid" id="kinds"></div>
+    </fieldset>
     <button class="btn" id="make" type="button">만들기</button>
     <p class="guess" id="guess" aria-live="polite"></p>
     <button class="link" id="again1" type="button">다른 사진 고르기</button>
