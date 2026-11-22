@@ -1,7 +1,7 @@
 // 짤 모자이크 — 모든 계산은 이 기기 브라우저 안에서만 (사진은 어디에도 안 올라감)
 // dc-stats/mosaic_build.py · mosaic_assemble.py 를 그대로 옮김 (짤 고르기 · 색 맞추기 · 모이는 연출)
 // 여러 모양(카드섹션 · 슬롯머신 · 변신 · 무한 줌 · 크기가 다른 짤 · 벌집)은 patterns.js
-import { makePatterns } from './patterns.js?v=20261122c';   // 고치면 index.html 의 app.js?v= 와 같이 바꿈
+import { makePatterns } from './patterns.js?v=20261122e';   // 고치면 index.html 의 app.js?v= 와 같이 바꿈
 
 const CFG = {
   SHIFT: 0.45, OVERLAY: 0.22, NEAR: 4, REUSE: 6.0,          // 짤 고르기 · 색 맞추기 (파이썬과 같음)
@@ -522,21 +522,34 @@ const ui = {
   prev: $('#preview'), make: $('#make'), guess: $('#guess'), again1: $('#again1'), again2: $('#again2'),
   bar: $('#bar'), work: $('#work-text'), eta: $('#eta'),
   out: $('#result'), size: $('#size'), save: $('#save'), err: $('#err'),
-  kinds: $('#kinds'), hint: $('#hint'),
+  kinds: $('#kinds'), hint: $('#hint'), ex: $('#kind-ex'), exImg: $('#kind-ex-img'),
 };
 let photo = null, focus = null, busy = false, lastURL = null, prepP = null, token = 0;
 const QP = new URLSearchParams(location.search);            // ?pattern=cards 로 모양을 미리 고를 수 있음 · ?focus=0.34,0.25 는 시험용
 
 // 모양 고르기 (벌집은 11-22 사용자 요청으로 화면에서 뺌 · 그림 느낌은 시안만 — patterns.js 에는 남겨 둠)
+// group: 'zzal' = 짤로 만들기 · 'art' = 그림으로 만들기(그림 AI 파일 하나를 같이 씀)
+const AI_NOTE = '그림 AI 파일(약 4MB)을 처음 한 번만 받아요(그림 재료끼리 같이 써요).';
 const KINDS = [
-  { key: 'assemble', name: '모이기', desc: '짤이 사방에서 날아와 모여요', box: true, estT: CFG.T_END, hint: '점선 네모 안에서 시작해서 짤이 모이며 전체 사진이 돼요.' },
-  { key: 'cards', name: '카드섹션', desc: '얼굴부터 카드가 차례로 뒤집혀요', box: true, estT: CFG.T_END, hint: '점선 네모 안, 누른 곳부터 카드가 뒤집히며 전체 사진이 돼요.' },
-  { key: 'slot', name: '슬롯머신', desc: '줄마다 돌다가 하나씩 멈춰요', box: true, estT: CFG.T_END, hint: '점선 네모 안, 누른 곳 쪽 줄부터 멈추며 전체 사진이 돼요.' },
-  { key: 'morph', name: '변신', desc: '색깔별로 놓인 짤이 사진이 돼요', box: false, estT: 4.7, hint: '색깔별로 놓인 짤이 누른 곳부터 제자리를 찾아가요.' },
-  { key: 'droste', name: '무한 줌', desc: '사진 속 작은 사진으로 계속 들어가요', box: false, estT: 6.2, hint: '누른 곳은 가리지 않게 구석에 작은 사진을 넣어요.' },
-  { key: 'quad', name: '크기가 다른 짤', desc: '큰 짤이 쪼개지며 또렷해져요', box: false, estT: 4.2, hint: '누른 곳 둘레는 작은 짤로 또렷하게 만들어요.' },
-  { key: 'sketch', name: '그려지기', desc: '연필 스케치에 짤로 색칠해요', box: false, estT: 5.7, hint: '누른 곳부터 연필 선이 그려지고, 그 위에 짤로 색칠돼요.' },
+  { key: 'assemble', group: 'zzal', name: '모이기', desc: '짤이 사방에서 날아와 모여요', box: true, estT: CFG.T_END, hint: '점선 네모 안에서 시작해서 짤이 모이며 전체 사진이 돼요.' },
+  { key: 'cards', group: 'zzal', name: '카드섹션', desc: '얼굴부터 카드가 차례로 뒤집혀요', box: true, estT: CFG.T_END, hint: '점선 네모 안, 누른 곳부터 카드가 뒤집히며 전체 사진이 돼요.' },
+  { key: 'slot', group: 'zzal', name: '슬롯머신', desc: '줄마다 돌다가 하나씩 멈춰요', box: true, estT: CFG.T_END, hint: '점선 네모 안, 누른 곳 쪽 줄부터 멈추며 전체 사진이 돼요.' },
+  { key: 'morph', group: 'zzal', name: '변신', desc: '색깔별로 놓인 짤이 사진이 돼요', box: false, estT: 4.7, hint: '색깔별로 놓인 짤이 누른 곳부터 제자리를 찾아가요.' },
+  { key: 'droste', group: 'zzal', name: '무한 줌', desc: '사진 속 작은 사진으로 계속 들어가요', box: false, estT: 6.2, hint: '누른 곳은 가리지 않게 구석에 작은 사진을 넣어요.' },
+  { key: 'quad', group: 'zzal', name: '크기가 다른 짤', desc: '큰 짤이 쪼개지며 또렷해져요', box: false, estT: 4.2, hint: '누른 곳 둘레는 작은 짤로 또렷하게 만들어요.' },
+  { key: 'sketch', group: 'zzal', name: '그려지기', desc: '연필 스케치에 짤로 색칠해요', box: false, estT: 5.7, hint: '누른 곳부터 연필 선이 그려지고, 그 위에 짤로 색칠돼요.' },
+  { key: 'crayon', group: 'art', name: '크레파스', desc: '크레파스로 그린 그림이 돼요', box: false, estT: 5.3, hint: `누른 곳부터 테두리를 그리고 크레파스로 칠해요. ${AI_NOTE}` },
+  { key: 'watercolor', group: 'art', name: '수채화', desc: '맑게 번지는 수채화가 돼요', box: false, estT: 5.3, hint: `누른 곳부터 맑은 물감으로 칠해요. ${AI_NOTE}` },
+  { key: 'cpencil', group: 'art', name: '색연필', desc: '종이가 비치는 색연필 그림이 돼요', box: false, estT: 5.3, hint: `누른 곳부터 색연필로 칠해요. ${AI_NOTE}` },
+  { key: 'oil', group: 'art', name: '유화', desc: '물감을 두껍게 바른 유화가 돼요', box: false, estT: 5.3, hint: `누른 곳부터 물감을 두껍게 발라요. ${AI_NOTE}` },
+  { key: 'charcoal', group: 'art', name: '연필·목탄', desc: '연필과 목탄으로 그린 흑백 그림이 돼요', box: false, estT: 5.3, hint: `누른 곳부터 연필과 목탄으로 흑백 그림을 그려요. ${AI_NOTE}` },
+  { key: 'ink', group: 'art', name: '수묵화', desc: '한지에 먹으로 그린 그림이 돼요', box: false, estT: 5.3, hint: `누른 곳부터 먹으로 그려요. ${AI_NOTE}` },
 ];
+const GROUPS = [
+  { key: 'zzal', title: '짤로 만들기' },
+  { key: 'art', title: '그림으로 만들기', note: '짤 대신 그림 AI가 그려요. 처음 한 번 4MB를 받아요.' },
+];
+const EXV = '3';                                             // 예시 움짤(ex/) 버전 — 다시 만들면 바꿈 (11-22: 400px · 초당 16장 · 3: 그림 재료 5종 추가)
 const qpKey = QP.get('pattern');                              // 화면에 없는 모양(시험 중 · 벌집)도 주소로는 열림
 let kind = KINDS.find((k) => k.key === qpKey)
   || (PATTERNS[qpKey] ? { key: qpKey, name: PATTERNS[qpKey].name, desc: '', box: false, estT: CFG.T_END, hint: '시험 중인 모양이에요.' } : KINDS[0]);
@@ -551,16 +564,39 @@ function setKind(k) {
   ui.hint.textContent = `${k.hint} 얼굴이 다른 곳에 있으면 얼굴을 눌러 주세요.`;
   if (photo && !ui.stepAim.hidden) drawPreview();
   if (lastPrep) ui.guess.textContent = guessText(lastPrep);
+  const P = PATTERNS[k.key];                                 // 미리 받을 파일이 있는 모양(그림 재료 — AI 파일)은 고르자마자 받아 둠
+  if (P?.prefetch) Promise.resolve().then(() => P.prefetch()).catch(() => { /* 만들 때 다시 시도 */ });
+  showExample();
 }
+function showExample() {                                     // 고른 모양의 예시 움짤 (경복궁 사진) — 사진을 고른 뒤에만 받음
+  if (!KINDS.includes(kind) || ui.stepAim.hidden) { ui.ex.hidden = true; return; }
+  const src = `ex/${kind.key}.webp?v=${EXV}`;
+  if (ui.exImg.getAttribute('src') !== src) { ui.exImg.src = src; ui.exImg.alt = `${kind.name} 예시 움짤`; ui.ex.hidden = false; }
+  else ui.ex.hidden = ui.exImg.complete && !ui.exImg.naturalWidth;   // 같은 그림을 이미 못 받았으면 계속 숨김
+}
+ui.exImg.addEventListener('error', () => { ui.ex.hidden = true; });   // 예시가 아직 없거나 못 받으면 깨진 그림 대신 칸을 숨김
 (function renderKinds() {
-  for (const k of KINDS) {
-    const lab = document.createElement('label'), inp = document.createElement('input'), nm = document.createElement('span'), ds = document.createElement('span');
-    lab.className = 'kind'; lab.dataset.key = k.key;
-    inp.type = 'radio'; inp.name = 'kind'; inp.value = k.key;
-    inp.addEventListener('change', () => { if (inp.checked) setKind(k); });
-    nm.className = 'kind-name'; nm.textContent = k.name;
-    ds.className = 'kind-desc'; ds.textContent = k.desc;
-    lab.append(inp, nm, ds); ui.kinds.append(lab);
+  for (const g of GROUPS) {
+    const box = document.createElement('div'), head = document.createElement('p'), grid = document.createElement('div');
+    box.className = 'kind-group'; box.setAttribute('role', 'group');
+    head.className = 'kind-head'; head.id = `kind-head-${g.key}`; head.textContent = g.title;
+    box.setAttribute('aria-labelledby', head.id); box.append(head);
+    if (g.note) {
+      const nt = document.createElement('p');
+      nt.className = 'kind-note'; nt.id = `kind-note-${g.key}`; nt.textContent = g.note;
+      box.setAttribute('aria-describedby', nt.id); box.append(nt);
+    }
+    grid.className = 'kind-grid';
+    for (const k of KINDS.filter((x) => x.group === g.key)) {
+      const lab = document.createElement('label'), inp = document.createElement('input'), nm = document.createElement('span'), ds = document.createElement('span');
+      lab.className = 'kind'; lab.dataset.key = k.key;
+      inp.type = 'radio'; inp.name = 'kind'; inp.value = k.key;
+      inp.addEventListener('change', () => { if (inp.checked) setKind(k); });
+      nm.className = 'kind-name'; nm.textContent = k.name;
+      ds.className = 'kind-desc'; ds.textContent = k.desc;
+      lab.append(inp, nm, ds); grid.append(lab);
+    }
+    box.append(grid); ui.kinds.append(box);
   }
   setKind(kind);
 })();
@@ -601,7 +637,7 @@ ui.file.addEventListener('change', async () => {
   catch (e) { error(e.message || '사진을 열 수 없어요.'); return; }
   const qf = (QP.get('focus') || '').split(',').map(Number);   // 시험용: ?focus=0.34,0.25 (사진 안 비율)
   focus = qf.length === 2 && qf.every((v) => v >= 0 && v <= 1) ? [qf[0] * photo.width, qf[1] * photo.height] : [photo.width / 2, photo.height / 3];
-  show(ui.stepAim); drawPreview();
+  show(ui.stepAim); drawPreview(); showExample();
   ui.guess.textContent = '이 폰에서 걸릴 시간 재는 중…';
   await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 30)));
   const ph = photo;
@@ -644,8 +680,9 @@ ui.make.addEventListener('click', async () => {
     show(ui.stepDone);
   } catch (e) {
     console.error(e);
-    show(ui.stepAim); drawPreview();
-    error((e && e.message ? e.message : '만들다가 멈췄어요.') + ' 다시 눌러 보세요.');
+    show(ui.stepAim); drawPreview(); showExample();
+    const msg = e && e.message ? e.message : '만들다가 멈췄어요.';
+    error(/주세요\.$/.test(msg) ? msg : msg + ' 다시 눌러 보세요.');   // 이미 '…주세요.' 로 끝나는 안내엔 덧붙이지 않음
   } finally {
     busy = false; try { await lock?.release(); } catch (e) { /* */ }
   }

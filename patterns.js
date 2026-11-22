@@ -695,5 +695,200 @@ export function makePatterns(H) {
     },
   };
 
-  return { assemble, cards, slot, morph, droste, quad, hex, sketch, paint };
+  // ── 그림 AI 재료 (크레파스 · 수채화 · 색연필 · 유화 · 연필·목탄 · 수묵화): 짤 대신 그림체 AI — 밑그림 선을 먼저 그리고, 얼굴부터 재료답게 칠함
+  //    AI: Magenta 그림체 옮기기 (Apache-2.0, vendor/style-transfer/NOTICE.md) 를 이 기기 브라우저에서 돌림 · 처음 한 번 약 4MB
+  //    그림체 값은 재료마다 vendor/style-transfer/<재료>.json (lab/media.html 에서 미리 계산) · 마무리 수식은 lab/crayon.html · lab/media.html 그대로
+  let aiP = null;
+  const embP = {};
+  function loadAI() {                                           // tfjs + 그림체 입히는 AI (한 번만)
+    if (!aiP) aiP = (async () => {
+      if (!window.tf) await new Promise((res, rej) => { const s = document.createElement('script'); s.src = 'vendor/tfjs/tf.min.js?v=4.22.0'; s.onload = res; s.onerror = rej; document.head.append(s); });
+      const tf = window.tf; await tf.ready();
+      if (tf.getBackend() !== 'webgl') { const e = new Error('이 폰에서는 그림 AI를 쓸 수 없어요(그래픽 기능이 꺼져 있어요). 짤로 만들기 모양을 골라 주세요.'); e.noWebGL = true; throw e; }
+      tf.env().set('WEBGL_DELETE_TEXTURE_THRESHOLD', 0);       // 다 쓴 그래픽 메모리를 바로 돌려줌 (안 하면 1GB 넘게 붙잡아서 아이폰 탭이 꺼질 수 있음 — 11-22 점검)
+      return { tf, net: await tf.loadGraphModel('vendor/style-transfer/model.json') };
+    })().catch((e) => { aiP = null; throw e; });
+    return aiP;
+  }
+  function loadEmb(key) {                                       // 재료 그림체 값 (재료마다 한 번만)
+    if (!embP[key]) embP[key] = fetch(`vendor/style-transfer/${key}.json`).then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .catch((e) => { delete embP[key]; throw e; });
+    return embP[key];
+  }
+  const loadMaterial = (key) => Promise.all([loadAI(), loadEmb(key)]);
+  function sketchLine(gray, VW, VH) {                           // 사진에서 뽑은 연필 선 (회색 ÷ (1 − 흐린 반전)) · 삐뚤빼뚤 · 결 → (x, y) 선 진하기 0~1
+    const N = VW * VH, inv = new Float32Array(N); for (let i = 0; i < N; i++) inv[i] = 255 - gray[i];
+    const bl = boxBlur(inv, VW, VH, Math.max(2, Math.round(VW / 140)));
+    const nx = smoothNoise(VW, VH, 14, 21), ny = smoothNoise(VW, VH, 14, 22), lineTex = smoothNoise(VW, VH, 2.2, 24);
+    const lineAt = (i) => { const den = 255 - bl[i], v = den <= 1 ? 255 : Math.min(255, gray[i] * 255 / den); return Math.pow(1 - v / 255, 0.8); };
+    return (x, y, i) => {
+      const sx = clamp(Math.round(x + (nx[i] - 0.5) * 3), 0, VW - 1), sy = clamp(Math.round(y + (ny[i] - 0.5) * 3), 0, VH - 1);
+      return Math.min(1, lineAt(sy * VW + sx) * 2.4) * (0.65 + 0.35 * lineTex[i]);
+    };
+  }
+  function sketchLines(Yo, w, h, r, pow) {                      // lab/media.html 의 sketchLines (0 = 없음 · 1 = 진함)
+    const N = w * h, inv = new Float32Array(N); for (let i = 0; i < N; i++) inv[i] = 255 - Yo[i];
+    const bl = boxBlur(inv, w, h, r), out = new Float32Array(N);
+    for (let i = 0; i < N; i++) { const den = 255 - bl[i], v = den <= 1 ? 255 : Math.min(255, Yo[i] * 255 / den); out[i] = Math.pow(1 - v / 255, pow); }
+    return out;
+  }
+  // 크레파스 마무리 (lab C 와 같음): 밝기 = AI 60% + 사진 40% · 색 = 사진 88% · 조금 진하게 · 삐뚤빼뚤한 테두리 · 종이 흰 점
+  function crayonFinish({ VW, VH, N, sd, od, lineA, paper: PAPER }) {
+    const KEEP = 0.88, SAT = 1.25, LUM = 0.4, INK = [52, 38, 30];
+    const F = new Uint8ClampedArray(N * 4), LO = new Uint8ClampedArray(N * 4);
+    for (let i = 0; i < N; i++) {
+      const o = i * 4, yo = 0.299 * od[o] + 0.587 * od[o + 1] + 0.114 * od[o + 2], Y = (0.299 * sd[o] + 0.587 * sd[o + 1] + 0.114 * sd[o + 2]) * (1 - LUM) + yo * LUM;
+      const cb = ((-0.1687 * od[o] - 0.3313 * od[o + 1] + 0.5 * od[o + 2]) * KEEP + (-0.1687 * sd[o] - 0.3313 * sd[o + 1] + 0.5 * sd[o + 2]) * (1 - KEEP)) * SAT;
+      const cr = ((0.5 * od[o] - 0.4187 * od[o + 1] - 0.0813 * od[o + 2]) * KEEP + (0.5 * sd[o] - 0.4187 * sd[o + 1] - 0.0813 * sd[o + 2]) * (1 - KEEP)) * SAT;
+      F[o] = Y + 1.402 * cr; F[o + 1] = Y - 0.344136 * cb - 0.714136 * cr; F[o + 2] = Y + 1.772 * cb; F[o + 3] = 255;
+    }
+    const grain = smoothNoise(VW, VH, 1.5, 23);
+    const dot = (A, o, g) => {                                  // 종이 흰 점
+      const lum = (0.299 * A[o] + 0.587 * A[o + 1] + 0.114 * A[o + 2]) / 255, k = Math.min(0.6, (g - 0.76) * 3.5) * (0.25 + 0.75 * lum);
+      for (let ch = 0; ch < 3; ch++) A[o + ch] += (PAPER[ch] - A[o + ch]) * k;
+    };
+    for (let y = 0; y < VH; y++) for (let x = 0; x < VW; x++) {
+      const i = y * VW + x, o = i * 4, a = lineA(x, y, i);
+      for (let ch = 0; ch < 3; ch++) { F[o + ch] = F[o + ch] * (1 - a) + INK[ch] * a; LO[o + ch] = PAPER[ch] * (1 - a) + INK[ch] * a; }
+      LO[o + 3] = 255;
+      const g = grain[i];
+      if (g > 0.76) { dot(F, o, g); dot(LO, o, g); }
+    }
+    return { F, LO };
+  }
+  // 다른 재료 마무리 (lab/media.html 과 같음): 밝기·색 섞기 → 재료마다 step → 종이색(tint) · 흑백. 밑그림은 종이에 재료 연필 선
+  function labFinish(m) {
+    return ({ VW, VH, N, sd, od, gray, lineA, paper }) => {
+      const Ys = new Float32Array(N), Y = new Float32Array(N), Cb = new Float32Array(N), Cr = new Float32Array(N);
+      for (let i = 0, o = 0; i < N; i++, o += 4) {
+        Ys[i] = 0.299 * sd[o] + 0.587 * sd[o + 1] + 0.114 * sd[o + 2];
+        const cbS = -0.1687 * sd[o] - 0.3313 * sd[o + 1] + 0.5 * sd[o + 2], crS = 0.5 * sd[o] - 0.4187 * sd[o + 1] - 0.0813 * sd[o + 2];
+        const cbO = -0.1687 * od[o] - 0.3313 * od[o + 1] + 0.5 * od[o + 2], crO = 0.5 * od[o] - 0.4187 * od[o + 1] - 0.0813 * od[o + 2];
+        Y[i] = Ys[i] * (1 - m.lum) + gray[i] * m.lum; Cb[i] = (cbO * m.keep + cbS * (1 - m.keep)) * m.sat; Cr[i] = (crO * m.keep + crS * (1 - m.keep)) * m.sat;
+      }
+      m.step({ VW, VH, N, Ys, Yo: gray, Y, Cb, Cr });
+      const F = new Uint8ClampedArray(N * 4), LO = new Uint8ClampedArray(N * 4), tint = m.tint, C = m.line, s = m.lineS;
+      for (let i = 0, o = 0; i < N; i++, o += 4) {
+        const y = Y[i];
+        if (m.gray) { F[o] = y * tint[0] / 255; F[o + 1] = y * tint[1] / 255; F[o + 2] = y * tint[2] / 255; }
+        else { F[o] = (y + 1.402 * Cr[i]) * tint[0] / 255; F[o + 1] = (y - 0.344136 * Cb[i] - 0.714136 * Cr[i]) * tint[1] / 255; F[o + 2] = (y + 1.772 * Cb[i]) * tint[2] / 255; }
+        F[o + 3] = 255;
+      }
+      for (let y = 0; y < VH; y++) for (let x = 0; x < VW; x++) {
+        const i = y * VW + x, o = i * 4, a = lineA(x, y, i) * s;
+        for (let ch = 0; ch < 3; ch++) LO[o + ch] = paper[ch] + (C[ch] - paper[ch]) * a;
+        LO[o + 3] = 255;
+      }
+      return { F, LO };
+    };
+  }
+  const inside = (x, y, W, H) => x > 0 && y > 0 && x < W - 1 && y < H - 1;
+  const STEP = {
+    watercolor({ VW, VH, N, Ys, Y, Cb, Cr }) {                  // 밝고 맑게 · 색이 선 밖으로 번짐 · 물감 가장자리 진해짐 · 종이 결
+      Cb.set(boxBlur(Cb, VW, VH, 4)); Cr.set(boxBlur(Cr, VW, VH, 4));
+      const yb = boxBlur(Ys, VW, VH, 2);
+      for (let y = 0; y < VH; y++) for (let x = 0; x < VW; x++) { const i = y * VW + x, e = inside(x, y, VW, VH) ? Math.abs(yb[i + 1] - yb[i - 1]) + Math.abs(yb[i + VW] - yb[i - VW]) : 0; Y[i] = 255 - (255 - Y[i]) * 0.8 - Math.min(26, e * 0.9); }
+      const pg = smoothNoise(VW, VH, 1.4, 31), pg2 = smoothNoise(VW, VH, 7, 32); for (let i = 0; i < N; i++) Y[i] *= 1 - 0.06 * pg[i] - 0.04 * pg2[i];
+    },
+    cpencil({ VW, VH, N, Yo, Y, Cb, Cr }) {                     // 종이 흰색이 비치게 밝게 · 흐린 연필 윤곽 · 종이 흰 점
+      const Ln = sketchLines(Yo, VW, VH, Math.max(2, Math.round(VW / 150)), 0.9), g = smoothNoise(VW, VH, 1.4, 33);
+      for (let i = 0; i < N; i++) { let v = 255 - (255 - Y[i]) * 0.86 - 70 * Math.min(1, Ln[i] * 1.8) * 0.45; if (g[i] > 0.6) { const k = Math.min(0.75, (g[i] - 0.6) * 3) * (0.3 + 0.7 * v / 255); v += (253 - v) * k; Cb[i] *= 1 - k; Cr[i] *= 1 - k; } Y[i] = v; }
+    },
+    oil({ VW, VH, Ys, Y }) {                                    // 물감 두께: 왼쪽 위에서 빛 · 캔버스 결
+      const yb = boxBlur(Ys, VW, VH, 1);
+      for (let y = 0; y < VH; y++) for (let x = 0; x < VW; x++) { const i = y * VW + x, e = inside(x, y, VW, VH) ? yb[i - VW - 1] - yb[i + VW + 1] : 0; Y[i] = Y[i] + clamp(e * 0.55, -28, 28) - 0.05 * Y[i] * (0.5 + 0.5 * Math.sin(x * 1.6) * Math.sin(y * 1.6)); }
+    },
+    charcoal({ VW, VH, N, Yo, Y }) {                            // 흑백 · 진한 곳 더 진하게 · 연필 윤곽 · 종이 흰 점
+      const Ln = sketchLines(Yo, VW, VH, Math.max(2, Math.round(VW / 120)), 0.8), g = smoothNoise(VW, VH, 1.3, 34);
+      for (let i = 0; i < N; i++) { let v = 255 * Math.pow(Y[i] / 255, 1.3) - 120 * Math.min(1, Ln[i] * 1.6) * 0.6; if (g[i] > 0.62 && v < 200) v += (240 - v) * Math.min(0.6, (g[i] - 0.62) * 2.5); Y[i] = v; }
+    },
+    ink({ VW, VH, N, Yo, Y }) {                                 // 먹: 어두운 곳은 진하게(S곡선) · 밝은 곳은 한지 · 먹 선 · 번진 얼룩 · 한지 결
+      const yb = boxBlur(Y, VW, VH, 1), Ln = sketchLines(Yo, VW, VH, Math.max(2, Math.round(VW / 130)), 0.85), wash = smoothNoise(VW, VH, 18, 36), fib = smoothNoise(VW, VH, 2.5, 35);
+      for (let i = 0; i < N; i++) {
+        let v = yb[i] / 255;
+        v = v < 0.5 ? 0.5 * Math.pow(2 * v, 1.6) : 1 - 0.5 * Math.pow(2 * (1 - v), 0.75);
+        v = v * 255 * (0.9 + 0.1 * wash[i]) - 150 * Math.min(1, Ln[i] * 1.7) * 0.75;
+        Y[i] = v * (1 - 0.05 * fib[i]);
+      }
+    },
+  };
+  const AI_FAIL = '그림 AI 파일(약 4MB)을 받지 못했어요. 인터넷 연결을 확인해 주세요.';   // 화면에서 뒤에 ' 다시 눌러 보세요.' 가 붙음
+  // 재료 하나: cfg = { name, sw(AI 에 넣는 폭, 800 기준), paper(빈 종이색), fill(칠하는 모양 hatch·wash·band), cf(한 곳이 칠해지는 시간), finish }
+  function aiMaterial(key, cfg) {
+    return {
+      name: cfg.name, layout: true, prefetch: () => loadMaterial(key),
+      async make(c) {
+        const { L, photo, tr } = c, { VW, VH } = L, N = VW * VH, PAPER = cfg.paper;
+        let ai, emb;
+        tr.tick(0.02, '그림 AI 준비하는 중… (처음 한 번 약 4MB)');
+        try { [ai, emb] = await loadMaterial(key); } catch (e) { throw e && e.noWebGL ? e : new Error(AI_FAIL); }
+        const { tf, net } = ai;
+        tr.tick(0.3, 'AI가 그림체를 입히는 중…'); await sleep0();
+        // ① AI: 작게(결이 굵어지게) 넣어서 재료 결을 입힘
+        const SW = Math.max(160, Math.round(cfg.sw * VW / 800)), SH = Math.max(160, Math.round(SW * VH / VW));
+        const small = canvas(SW, SH), smx = small.getContext('2d'); smx.imageSmoothingQuality = 'high'; smx.drawImage(photo, 0, 0, SW, SH);
+        const out = tf.tidy(() => net.predict([tf.browser.fromPixels(small).toFloat().div(255).expandDims(), tf.tensor(emb.v, emb.shape)]).squeeze().clipByValue(0, 1));
+        const st = canvas(out.shape[1], out.shape[0]);
+        try { await tf.browser.toPixels(out, st); } finally { out.dispose(); free(small); }
+        tr.tick(0.7, '그림 마무리하는 중…'); await sleep0();
+        // ② 마무리: 끝 그림 F · 밑그림 LO (재료마다)
+        //    AI 결과는 입력을 4의 배수로 올린 크기라 오른쪽·아래에 1~3px 덧붙음 → 입력 크기만 잘라서 늘여야 사진 선과 안 어긋남 (11-22 점검)
+        const up = canvas(VW, VH), ux = up.getContext('2d', { willReadFrequently: true }); ux.imageSmoothingQuality = 'high'; ux.drawImage(st, 0, 0, Math.min(SW, st.width), Math.min(SH, st.height), 0, 0, VW, VH);
+        const sd = ux.getImageData(0, 0, VW, VH).data; free(up, st);
+        const pc = canvas(VW, VH), px = pc.getContext('2d', { willReadFrequently: true }); px.imageSmoothingQuality = 'high'; px.drawImage(photo, 0, 0, VW, VH);
+        const od = px.getImageData(0, 0, VW, VH).data; free(pc);
+        const gray = new Float32Array(N);
+        for (let i = 0, o = 0; i < N; i++, o += 4) gray[i] = 0.299 * od[o] + 0.587 * od[o + 1] + 0.114 * od[o + 2];
+        const { F, LO } = cfg.finish({ VW, VH, N, sd, od, gray, lineA: sketchLine(gray, VW, VH), paper: PAPER });
+        tr.tick(0.9); await sleep0();
+        // ③ 그려지는 시각: 밑그림 선은 얼굴부터 얼룩지게 (0.15~2.15초), 색칠은 그 뒤 얼굴부터 재료 모양으로 (2.0~5.25초)
+        //    hatch = 비스듬한 빗금 · wash = 물이 번지듯 큰 얼룩 · band = 한 방향 붓 띠
+        const fpx = c.focus[0] / L.Wm * VW, fpy = c.focus[1] / L.Hm * VH;
+        let dmax = 1; for (const [x, y] of [[0, 0], [VW, 0], [0, VH], [VW, VH]]) dmax = Math.max(dmax, Math.hypot(x - fpx, y - fpy));
+        const nz = smoothNoise(VW, VH, Math.max(18, Math.round(VW / 22)), 51), nz2 = smoothNoise(VW, VH, Math.max(10, Math.round(VW / 45)), 52);
+        const fill = cfg.fill, LF = 0.3, CF = cfg.cf || 0.25, C0 = 2.0, SPAN = 5.25 - C0 - CF, tl = new Float32Array(N), tc = new Float32Array(N);
+        const big = fill === 'wash' ? smoothNoise(VW, VH, Math.max(40, Math.round(VW / 9)), 53) : null;
+        const BH = Math.max(10, Math.round(VW / 40)), SL = BH * 6, ca = Math.cos(-0.3), sa = Math.sin(-0.3), OFF = VW + VH;   // 붓 띠 굵기 · 붓질 길이 · 방향
+        const nb = fill === 'band' ? Math.ceil(2 * OFF / BH) + 2 : 0, bandR = new Float32Array(nb), bandS = new Float32Array(nb), rb = mulberry32(57);
+        for (let b = 0; b < nb; b++) { bandR[b] = rb(); bandS[b] = rb() * SL; }
+        for (let y = 0; y < VH; y++) for (let x = 0; x < VW; x++) {
+          const i = y * VW + x, d = Math.pow(Math.hypot(x - fpx, y - fpy) / dmax, 0.8);
+          tl[i] = 0.15 + 1.7 * (0.75 * d + 0.25 * nz[i]);
+          let w;
+          if (fill === 'wash') w = 0.55 * d + 0.3 * big[i] + 0.15 * nz2[i];
+          else if (fill === 'band') { const b = Math.floor((-x * sa + y * ca + (nz2[i] - 0.5) * BH * 0.8 + OFF) / BH), u = x * ca + y * sa + bandS[b] + OFF; w = 0.6 * d + 0.2 * bandR[b] + 0.2 * ((u / SL) % 1); }
+          else { const hatch = 0.5 + 0.5 * Math.sin((x + y) / 3.2); w = 0.65 * d + 0.2 * nz2[i] + 0.15 * hatch; }
+          tc[i] = C0 + SPAN * w;
+        }
+        const T_END = C0 + SPAN + CF + 0.05;
+        const [frame, fx] = frameCanvas(L), img = fx.createImageData(VW, VH), dd = img.data;
+        let doneFinal = false;
+        function render(t) {
+          if (t >= T_END) { if (!doneFinal) { dd.set(F); doneFinal = true; } fx.putImageData(img, 0, 0); return frame; }
+          doneFinal = false;
+          for (let i = 0, o = 0; i < N; i++, o += 4) {
+            const la = clamp((t - tl[i]) / LF, 0, 1), ka = clamp((t - tc[i]) / CF, 0, 1);
+            for (let ch = 0; ch < 3; ch++) { const base = PAPER[ch] + (LO[o + ch] - PAPER[ch]) * la; dd[o + ch] = base + (F[o + ch] - base) * ka; }
+            dd[o + 3] = 255;
+          }
+          fx.putImageData(img, 0, 0);
+          return frame;
+        }
+        return { T_END, render, reset() { doneFinal = false; }, finalFrame: () => render(T_END + 1), dispose: () => free(frame) };
+      },
+    };
+  }
+  const crayon = aiMaterial('crayon', { name: '크레파스', sw: 480, paper: [251, 248, 241], fill: 'hatch', finish: crayonFinish });
+  const watercolor = aiMaterial('watercolor', { name: '수채화', sw: 460, paper: [252, 250, 245], fill: 'wash', cf: 0.35,
+    finish: labFinish({ keep: 0.85, sat: 1.1, lum: 0.3, tint: [252, 250, 245], line: [100, 100, 104], lineS: 0.45, step: STEP.watercolor }) });
+  const cpencil = aiMaterial('cpencil', { name: '색연필', sw: 520, paper: [253, 252, 248], fill: 'hatch',
+    finish: labFinish({ keep: 0.85, sat: 1.15, lum: 0.35, tint: [253, 252, 248], line: [100, 100, 104], lineS: 0.5, step: STEP.cpencil }) });
+  const oil = aiMaterial('oil', { name: '유화', sw: 420, paper: [226, 214, 192], fill: 'band', cf: 0.2,
+    finish: labFinish({ keep: 0.72, sat: 1.25, lum: 0.3, tint: [255, 255, 255], line: [110, 80, 55], lineS: 0.6, step: STEP.oil }) });
+  const charcoal = aiMaterial('charcoal', { name: '연필·목탄', sw: 460, paper: [243, 240, 233], fill: 'hatch',
+    finish: labFinish({ keep: 0, sat: 0, lum: 0.4, tint: [243, 240, 233], gray: true, line: [40, 40, 40], lineS: 0.8, step: STEP.charcoal }) });
+  const ink = aiMaterial('ink', { name: '수묵화', sw: 420, paper: [244, 238, 226], fill: 'wash', cf: 0.35,
+    finish: labFinish({ keep: 0, sat: 0, lum: 0.35, tint: [244, 238, 226], gray: true, line: [20, 20, 20], lineS: 0.85, step: STEP.ink }) });
+
+  return { assemble, cards, slot, morph, droste, quad, hex, sketch, paint, crayon, watercolor, cpencil, oil, charcoal, ink };
 }

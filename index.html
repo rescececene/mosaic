@@ -44,6 +44,10 @@
   .hint { margin: 14px 0 16px; font-size: 15px; color: var(--sub); }
   .kinds { margin: 0 0 18px; padding: 0; border: 0; min-width: 0; }
   .kinds legend { padding: 0; margin: 0 0 8px; font-size: 16px; font-weight: 700; }
+  .kind-group + .kind-group { margin-top: 18px; }
+  .kind-head { display: flex; align-items: center; gap: 10px; margin: 0 0 8px; font-size: 14px; font-weight: 700; line-height: 1.4; color: var(--sub); }
+  .kind-head::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+  .kind-note { margin: -4px 0 8px; font-size: 13px; line-height: 1.45; color: var(--sub); }
   .kind-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
   .kind { position: relative; display: block; padding: 10px 12px 11px; border: 1px solid var(--line); border-radius: 10px;
           background: var(--paper); cursor: pointer; -webkit-tap-highlight-color: transparent; }
@@ -53,6 +57,9 @@
   .kind.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: var(--pick); }
   .kind.on .kind-name { color: var(--accent); }
   .kind:has(input:focus-visible) { outline: 3px solid var(--ink); outline-offset: 2px; }
+  .kind-ex { margin: 0 0 18px; text-align: center; }
+  .kind-ex img { display: block; width: min(300px, 78%); height: auto; margin: 0 auto; border-radius: 8px; background: var(--track); }
+  .kind-ex figcaption { margin-top: 6px; font-size: 13.5px; color: var(--sub); }
   .guess { margin: 10px 0 0; min-height: 1.6em; font-size: 15px; color: var(--sub); text-align: center; }
   .stage { display: flex; justify-content: center; margin: 0 0 18px; }
   #preview { display: block; max-width: 100%; border-radius: 6px; cursor: crosshair; touch-action: manipulation; }
@@ -75,12 +82,12 @@
 <canvas id="wall" aria-hidden="true"></canvas>
 <main>
   <h1>짤 모자이크</h1>
-  <p class="lead">사진 한 장을 고르면 컨갤 짤 5,885장이 그 사진을 만드는 움짤이 나와요. 짤이 모이는 모양은 일곱 가지 중에 고를 수 있고, 디시에 바로 올릴 수 있게 저장돼요.</p>
+  <p class="lead">사진 한 장을 고르면 컨갤 짤 5,885장이 그 사진을 만드는 움짤이 나와요. 짤로 만드는 일곱 가지와 그림으로 만드는 여섯 가지 중에 고를 수 있고, 디시에 바로 올릴 수 있게 저장돼요.</p>
 
   <div class="privacy" role="note">
     <p class="privacy-head">사진은 서버에 올라가지 않아요</p>
     <p>고른 사진은 지금 쓰는 폰(컴퓨터) 안에서만 처리돼요. 어디로도 전송되지 않고, 이 페이지가 따로 저장해 두지도 않아요.</p>
-    <p>페이지가 다 열린 뒤에는 비행기 모드로 바꿔도 만들어져요. 직접 확인해 보셔도 돼요.</p>
+    <p>짤로 만들기는 페이지가 다 열린 뒤 비행기 모드로 바꿔도 만들어져요. 그림으로 만들기는 처음 한 번 그림 AI 파일(약 4MB)을 받은 뒤부터 돼요. 직접 확인해 보셔도 돼요.</p>
   </div>
 
   <section id="step-pick">
@@ -93,8 +100,12 @@
     <p class="hint" id="hint">점선 네모 안에서 시작해서 짤이 모이며 전체 사진이 돼요. 얼굴이 다른 곳에 있으면 얼굴을 눌러 주세요.</p>
     <fieldset class="kinds">
       <legend>어떻게 만들까요?</legend>
-      <div class="kind-grid" id="kinds"></div>
+      <div id="kinds"></div>
     </fieldset>
+    <figure class="kind-ex" id="kind-ex" hidden>
+      <img id="kind-ex-img" alt="" width="400" height="600" decoding="async">
+      <figcaption>예시: 경복궁 사진으로 만들면 이렇게 돼요</figcaption>
+    </figure>
     <button class="btn" id="make" type="button">만들기</button>
     <p class="guess" id="guess" aria-live="polite"></p>
     <button class="link" id="again1" type="button">다른 사진 고르기</button>
@@ -121,7 +132,9 @@
   <p>이 페이지에는 사진을 받는 서버가 없어요.</p>
   <p>남의 사진이나 불쾌한 사진은 쓰지 말아 주세요.</p>
   <p>짤: 컨갤에 올라온 짤 5,885장 (겹치는 짤은 뺐어요)</p>
+  <p>그림 재료(크레파스·수채화·색연필·유화·연필·목탄·수묵화): 구글 Magenta의 그림체 AI를 Reiichiro Nakano가 브라우저용으로 옮긴 것(Apache-2.0)을 TensorFlow.js로 이 폰에서 돌려요.</p>
+  <p>예시 사진: Pixabay의 경복궁 사진</p>
 </footer>
-<script type="module" src="app.js?v=20261122c"></script><!-- 프로그램을 고치면 v 를 바꿈 (폰이 예전 파일을 10분 동안 쓰지 않게) -->
+<script type="module" src="app.js?v=20261122e"></script><!-- 프로그램을 고치면 v 를 바꿈 (폰이 예전 파일을 10분 동안 쓰지 않게) -->
 </body>
 </html>
