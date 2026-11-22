@@ -325,12 +325,14 @@ function getEncoder() {
 }
 
 // ───────── 여러 장 → 움직이는 WebP 한 개 (RIFF · VP8X · ANIM · ANMF)
-function muxWebP(frames, W, H, durs) {
+// hold: 끝 멈춤을 '긴 한 장' 대신 '같은 간격의 짧은 장면 여러 장'으로 (11-22: 디시에 올리면 장면별 시간이 사라져 멈춤이 없어졌음)
+//       늘어나는 장면은 왼쪽 위 1×1 점을 같은 색으로 다시 칠하는 것 → 화면은 그대로, 한 장에 수십 바이트
+function muxWebP(frames, W, H, durs, hold) {
   const le24 = (v) => [v & 255, (v >> 8) & 255, (v >> 16) & 255];
   const le32 = (v) => [v & 255, (v >> 8) & 255, (v >> 16) & 255, (v >>> 24) & 255];
   const str = (s) => [...s].map((ch) => ch.charCodeAt(0));
   let body = 0, alpha = false;
-  const anmfs = frames.map((f, idx) => {
+  const parse = (f) => {
     const dv = new DataView(f.buffer, f.byteOffset, f.byteLength);
     if (String.fromCharCode(f[0], f[1], f[2], f[3]) !== 'RIFF' || String.fromCharCode(f[8], f[9], f[10], f[11]) !== 'WEBP') throw new Error('움짤 조각이 이상해요');
     const chunks = []; let p = 12;
@@ -344,11 +346,18 @@ function muxWebP(frames, W, H, durs) {
       }
       p = end + (sz & 1);
     }
-    const dataLen = chunks.reduce((a, c) => a + c.length, 0);
-    const head = new Uint8Array([...str('ANMF'), ...le32(16 + dataLen), ...le24(0), ...le24(0), ...le24(W - 1), ...le24(H - 1), ...le24(durs[idx]), 0b10]);
-    body += head.length + dataLen;
-    return [head, ...chunks];
-  });
+    return { chunks, len: chunks.reduce((a, c) => a + c.length, 0) };
+  };
+  const anmf = (d, w, h, dur) => {                          // 자리 (0,0) · 크기 w×h · 시간 · 섞지 않고 덮어쓰기(0b10)
+    const head = new Uint8Array([...str('ANMF'), ...le32(16 + d.len), ...le24(0), ...le24(0), ...le24(w - 1), ...le24(h - 1), ...le24(dur), 0b10]);
+    body += head.length + d.len;
+    return [head, ...d.chunks];
+  };
+  const anmfs = frames.map((f, idx) => anmf(parse(f), W, H, durs[idx]));
+  if (hold && hold.count > 0) {
+    const d = parse(hold.data);
+    for (let k = 0; k < hold.count; k++) anmfs.push(anmf(d, 1, 1, hold.dur));
+  }
   const vp8x = new Uint8Array([...str('VP8X'), ...le32(10), 0x02 | (alpha ? 0x10 : 0), 0, 0, 0, ...le24(W - 1), ...le24(H - 1)]);
   const anim = new Uint8Array([...str('ANIM'), ...le32(6), 255, 255, 255, 255, 0, 0]);
   const riff = new Uint8Array([...str('RIFF'), ...le32(4 + vp8x.length + anim.length + body), ...str('WEBP')]);
@@ -442,18 +451,25 @@ async function build(prep, focusPhoto, show) {
   const focus = [focusPhoto[0] * L.Wm / prep.photo.width, focusPhoto[1] * L.Hm / prep.photo.height];
   const P = makePlan(L, A.T, focus);
   const R = makeRenderer(L, A.T, mos, P);
-  const n = FRAMES;
-  const durs = Array.from({ length: n }, (_, i) => (i === n - 1 ? CFG.HOLD * 1000 : Math.round(1000 / CFG.FPS)));
+  const n = FRAMES, dt = Math.round(1000 / CFG.FPS);
+  const holdN = Math.max(0, Math.round(CFG.HOLD * CFG.FPS) - 1);   // 끝 멈춤 = 마지막 장면 + 같은 간격의 짧은 장면 holdN장 (muxWebP 참고)
+  const durs = new Array(n).fill(dt);
   try {
     // 화질 고르기: 마지막 장면 크기로 전체 크기를 어림 (실제 평균은 마지막 장면의 약 0.75배)
     tr.stage('probe', '20MB 안에 들어가게 화질 맞추는 중…');
     let qi = 0;
     const lastF = R.finalFrame();
+    const px = lastF.getContext('2d').getImageData(0, 0, 1, 1).data;   // 끝 멈춤 장면에 다시 칠할 왼쪽 위 점 색
     for (; qi < QS.length - 1; qi++) {
       const s = (await E.enc(lastF, QS[qi])).length;
       tr.tick(0.5);
       if (s * n * 0.8 <= CFG.LIMIT * 0.95) break;
     }
+    const dot = canvas(1, 1), dx = dot.getContext('2d', { alpha: false });
+    dx.fillStyle = `rgb(${px[0]},${px[1]},${px[2]})`; dx.fillRect(0, 0, 1, 1);
+    const hold = { data: await E.enc(dot, QS[0]), count: holdN, dur: dt };
+    free(dot);
+    const room = CFG.LIMIT - holdN * (24 + hold.data.length);       // 짧은 장면 몫을 빼고 남는 용량
     for (let pass = 0; ; pass++) {
       const q = QS[qi], frames = new Array(n), pend = []; let total = 0, over = false;
       R.reset();
@@ -462,18 +478,18 @@ async function build(prep, focusPhoto, show) {
         const f = R.render(i / CFG.FPS);
         pend.push(E.enc(f, q).then((b) => { frames[i] = b; total += b.length; }));
         if (pend.length >= 3) await pend.shift();
-        if (total > CFG.LIMIT) { over = true; break; }
+        if (total > room) { over = true; break; }
         const x = (i + 1) / n;                                // 뒤 장면일수록 짤이 많아 오래 걸림 (재 보니 앞 0.7 : 뒤 1.3)
         tr.tick(0.7 * x + 0.3 * x * x, pass ? `화질 낮춰 다시 만드는 중 ${i + 1}/${n}장` : `움짤 만드는 중 ${i + 1}/${n}장`);
         if (i % 2 === 1) await sleep0();
       }
       await Promise.all(pend);
-      if (!over && total <= CFG.LIMIT) {
+      if (!over && total <= room) {
         tr.tick(1, '파일로 묶는 중…');
-        const blob = muxWebP(frames, L.VW, L.VH, durs);
+        const blob = muxWebP(frames, L.VW, L.VH, durs, hold);
         tr.end();
         const r2 = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, +v.toFixed(2)]));
-        return { blob, w: L.VW, h: L.VH, frames: n, q, pass, enc: E.kind, cells: [L.cols, L.rows], sec: now() - t0, est: prep.total, times: r2(tr.times), ests: r2(est) };
+        return { blob, w: L.VW, h: L.VH, frames: n + holdN, q, pass, enc: E.kind, cells: [L.cols, L.rows], sec: now() - t0, est: prep.total, times: r2(tr.times), ests: r2(est) };
       }
       if (qi >= QS.length - 1) throw new Error('20MB 안에 넣지 못했어요. 다른 사진으로 해 주세요.');
       qi = Math.min(QS.length - 1, qi + 2);                  // 넘으면 화질 낮춰 다시
