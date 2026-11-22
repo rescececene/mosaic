@@ -704,7 +704,7 @@ export function makePatterns(H) {
     if (!aiP) aiP = (async () => {
       if (!window.tf) await new Promise((res, rej) => { const s = document.createElement('script'); s.src = 'vendor/tfjs/tf.min.js?v=4.22.0'; s.onload = res; s.onerror = rej; document.head.append(s); });
       const tf = window.tf; await tf.ready();
-      if (tf.getBackend() !== 'webgl') { const e = new Error('이 폰에서는 그림 AI를 쓸 수 없어요(그래픽 기능이 꺼져 있어요). 짤로 만들기 모양을 골라 주세요.'); e.noWebGL = true; throw e; }
+      if (tf.getBackend() !== 'webgl') { const e = new Error('이 기기에서는 그림 AI를 쓸 수 없어요(브라우저의 그래픽 가속이 꺼져 있어요). PC 크롬이면 설정 → 시스템 → \'가능한 경우 그래픽 가속 사용\'을 켜고 다시 시작해 주세요. 아니면 짤로 만들기 모양을 골라 주세요.'); e.noWebGL = true; throw e; }
       tf.env().set('WEBGL_DELETE_TEXTURE_THRESHOLD', 0);       // 다 쓴 그래픽 메모리를 바로 돌려줌 (안 하면 1GB 넘게 붙잡아서 아이폰 탭이 꺼질 수 있음 — 11-22 점검)
       return { tf, net: await tf.loadGraphModel('vendor/style-transfer/model.json') };
     })().catch((e) => { aiP = null; throw e; });

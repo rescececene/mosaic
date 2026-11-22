@@ -1,7 +1,7 @@
 // 짤 모자이크 — 모든 계산은 이 기기 브라우저 안에서만 (사진은 어디에도 안 올라감)
 // dc-stats/mosaic_build.py · mosaic_assemble.py 를 그대로 옮김 (짤 고르기 · 색 맞추기 · 모이는 연출)
 // 여러 모양(카드섹션 · 슬롯머신 · 변신 · 무한 줌 · 크기가 다른 짤 · 벌집)은 patterns.js
-import { makePatterns } from './patterns.js?v=20261122e';   // 고치면 index.html 의 app.js?v= 와 같이 바꿈
+import { makePatterns } from './patterns.js?v=20261122f';   // 고치면 index.html 의 app.js?v= 와 같이 바꿈
 
 const CFG = {
   SHIFT: 0.45, OVERLAY: 0.22, NEAR: 4, REUSE: 6.0,          // 짤 고르기 · 색 맞추기 (파이썬과 같음)
