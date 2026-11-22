@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>짤 모자이크</title>
+<meta name="description" content="사진 한 장을 고르면 컨갤 짤 5,885장이 날아와 그 사진을 만드는 움짤(WebP)이 나와요.">
+<meta property="og:title" content="짤 모자이크">
+<meta property="og:description" content="사진 한 장을 고르면 컨갤 짤 5,885장이 날아와 그 사진을 만들어요. 디시에 바로 올릴 수 있는 움짤로 저장돼요.">
+<meta property="og:image" content="https://rescececene.github.io/mosaic/og.jpg">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 4 4'%3E%3Crect width='2' height='2' fill='%233b4890'/%3E%3Crect x='2' y='2' width='2' height='2' fill='%233b4890'/%3E%3Crect x='2' width='2' height='2' fill='%23c9cfe8'/%3E%3Crect y='2' width='2' height='2' fill='%23c9cfe8'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #f6f7fa; --paper: #ffffff; --ink: #1c1e26; --sub: #5b6070; --line: #dde0e8;
+    --accent: #3b4890; --accent-ink: #ffffff; --track: #e6e8ef; --err: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14161b; --paper: #1c1f26; --ink: #eceef3; --sub: #a2a7b6; --line: #2d313b;
+            --accent: #8a98ee; --accent-ink: #10131c; --track: #2a2e38; --err: #ff8a80; }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", "Malgun Gothic", "Noto Sans KR", sans-serif;
+         word-break: keep-all; }
+  #wall { display: block; width: 100%; height: 90px; background: var(--track); opacity: 0; transition: opacity .6s ease; }
+  #wall.on { opacity: 1; }
+  @media (prefers-reduced-motion: reduce) { #wall { transition: none; } }
+  main { max-width: 560px; margin: 0 auto; padding: 0 16px 48px; }
+  h1 { font-size: 34px; line-height: 1.2; letter-spacing: -0.02em; margin: 26px 0 10px; font-weight: 800; }
+  .lead { margin: 0 0 24px; color: var(--sub); font-size: 17px; }
+  .btn { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 54px; padding: 0 20px;
+         border: 0; border-radius: 10px; background: var(--accent); color: var(--accent-ink);
+         font: inherit; font-size: 18px; font-weight: 700; text-decoration: none; cursor: pointer; }
+  .btn:focus-visible, .link:focus-visible, #preview:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+  .link { display: inline-block; margin-top: 14px; padding: 6px 2px; border: 0; background: none; color: var(--sub);
+          font: inherit; font-size: 15px; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+  .hint { margin: 14px 0 16px; font-size: 15px; color: var(--sub); }
+  .guess { margin: 10px 0 0; min-height: 1.6em; font-size: 15px; color: var(--sub); text-align: center; }
+  .stage { display: flex; justify-content: center; margin: 0 0 18px; }
+  #preview { display: block; max-width: 100%; border-radius: 6px; cursor: crosshair; touch-action: manipulation; }
+  .track { height: 10px; border-radius: 5px; background: var(--track); overflow: hidden; margin: 18px 0 12px; }
+  #bar { height: 100%; width: 0; background: var(--accent); transition: width .25s linear; }
+  @media (prefers-reduced-motion: reduce) { #bar { transition: none; } }
+  #work-text { font-weight: 700; font-size: 17px; margin: 0; }
+  #eta { margin: 2px 0 0; color: var(--sub); font-size: 15px; min-height: 1.6em; }
+  .keep { margin: 18px 0 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); font-size: 15px; color: var(--sub); }
+  #result { display: block; width: 100%; height: auto; border-radius: 6px; background: #fff; margin: 4px 0 12px; }
+  #size { margin: 0 0 16px; color: var(--sub); font-size: 15px; }
+  .tip { margin: 14px 0 0; font-size: 14px; color: var(--sub); }
+  #err { margin: 14px 0 0; color: var(--err); font-size: 15px; font-weight: 600; }
+  footer { max-width: 560px; margin: 0 auto; padding: 20px 16px 40px; border-top: 1px solid var(--line); color: var(--sub); font-size: 14px; }
+  footer p { margin: 0 0 6px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<canvas id="wall" aria-hidden="true"></canvas>
+<main>
+  <h1>짤 모자이크</h1>
+  <p class="lead">사진 한 장을 고르면 컨갤 짤 5,885장이 날아와 그 사진을 만들어요. 디시에 바로 올릴 수 있는 움짤로 저장돼요.</p>
+
+  <section id="step-pick">
+    <label class="btn" id="pick" for="file">사진 고르기</label>
+    <input id="file" type="file" accept="image/*" hidden>
+  </section>
+
+  <section id="step-aim" hidden>
+    <div class="stage"><canvas id="preview" tabindex="0" aria-label="사진 미리보기. 누른 곳부터 짤이 모여요"></canvas></div>
+    <p class="hint">점선 네모 안에서 시작해서 짤이 모이며 전체 사진이 돼요. 얼굴이 다른 곳에 있으면 얼굴을 눌러 주세요.</p>
+    <button class="btn" id="make" type="button">만들기</button>
+    <p class="guess" id="guess" aria-live="polite"></p>
+    <button class="link" id="again1" type="button">다른 사진 고르기</button>
+  </section>
+
+  <section id="step-work" hidden>
+    <div class="track"><div id="bar"></div></div>
+    <p id="work-text">준비하는 중…</p>
+    <p id="eta"></p>
+    <p class="keep">만드는 동안 화면을 켜 두고 이 창에 있어 주세요. 다른 앱으로 넘어가면 멈출 수 있어요.</p>
+  </section>
+
+  <section id="step-done" hidden>
+    <img id="result" alt="완성된 짤 모자이크 움짤">
+    <p id="size"></p>
+    <a class="btn" id="save" href="#" download>저장하기</a>
+    <p class="tip">아이폰은 '파일' 앱의 다운로드 폴더에 저장돼요. 디시 글쓰기에서 사진 첨부 → 파일 선택으로 올리면 돼요.</p>
+    <button class="link" id="again2" type="button">다른 사진으로 만들기</button>
+  </section>
+
+  <p id="err" role="alert" hidden></p>
+</main>
+<footer>
+  <p>고른 사진은 이 기기 안에서만 쓰여요. 어디에도 올라가거나 남지 않아요.</p>
+  <p>남의 사진이나 불쾌한 사진은 쓰지 말아 주세요.</p>
+  <p>짤: 컨갤에 올라온 짤 5,885장 (겹치는 짤은 뺐어요)</p>
+</footer>
+<script type="module" src="app.js"></script>
+</body>
+</html>
