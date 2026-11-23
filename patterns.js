@@ -816,7 +816,7 @@ export function makePatterns(H) {
   // 재료 하나: cfg = { name, sw(AI 에 넣는 폭, 800 기준), paper(빈 종이색), fill(칠하는 모양 hatch·wash·band), cf(한 곳이 칠해지는 시간), finish }
   function aiMaterial(key, cfg) {
     return {
-      name: cfg.name, layout: true, prefetch: () => loadMaterial(key),
+      name: cfg.name, layout: true, lo: true, prefetch: () => loadMaterial(key),   // lo: 움짤을 예전 크기로 (AI·폰 그래픽 메모리)
       async make(c) {
         const { L, photo, tr } = c, { VW, VH } = L, N = VW * VH, PAPER = cfg.paper;
         let ai, emb;
@@ -890,5 +890,25 @@ export function makePatterns(H) {
   const ink = aiMaterial('ink', { name: '수묵화', sw: 420, paper: [244, 238, 226], fill: 'wash', cf: 0.35,
     finish: labFinish({ keep: 0, sat: 0, lum: 0.35, tint: [244, 238, 226], gray: true, line: [20, 20, 20], lineS: 0.85, step: STEP.ink }) });
 
-  return { assemble, cards, slot, morph, droste, quad, hex, sketch, paint, crayon, watercolor, cpencil, oil, charcoal, ink };
+  // ── 다른 재료로 만들기 (실 공예 · 한 줄 그림 · 동판화 · 글자 초상화 · 큐브 모자이크, 11-23): 짤도 AI도 없이 계산으로만
+  //    모양마다 concepts/<이름>.js 를 처음 쓸 때 받음 (하나가 고장 나도 다른 모양은 그대로) · 페이지가 열리면 app.js 가 미리 받아 둠(비행기 모드용)
+  //    m.make(c, K) → { T_END, render(t), reset(), finalFrame(), dispose(), W?, H? } — W·H 를 주면 그 크기로 움짤을 만듦 (동그란 판은 정사각형)
+  const CV = '20261123b';                                       // concepts/ 버전 — 고치면 app.js · patterns.js 버전과 같이 바꿈
+  const K = { CFG, canvas, clamp, free, mulberry32, now, sleep0, PI, easeIO, frameCanvas, boxBlur, smoothNoise, grayOf };
+  function concept(file, name) {
+    let modP = null;
+    const load = () => modP || (modP = import(`./concepts/${file}.js?v=${CV}`).catch((e) => { modP = null; throw e; }));
+    return {
+      name, layout: true, calc: true, prefetch: load,
+      async make(c) {
+        let m;
+        try { m = await load(); } catch (e) { console.error(e); throw new Error('프로그램 파일을 받지 못했어요. 인터넷 연결을 확인해 주세요.'); }
+        return m.make(c, K);
+      },
+    };
+  }
+  const string = concept('string', '실 공예'), spiral = concept('spiral', '한 줄 그림'), engrave = concept('engrave', '동판화');
+  const letters = concept('letters', '글자 초상화'), cube = concept('cube', '큐브 모자이크');
+
+  return { assemble, cards, slot, morph, droste, quad, hex, sketch, paint, crayon, watercolor, cpencil, oil, charcoal, ink, string, spiral, engrave, letters, cube };
 }

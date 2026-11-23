@@ -1,14 +1,17 @@
 // 짤 모자이크 — 모든 계산은 이 기기 브라우저 안에서만 (사진은 어디에도 안 올라감)
 // dc-stats/mosaic_build.py · mosaic_assemble.py 를 그대로 옮김 (짤 고르기 · 색 맞추기 · 모이는 연출)
 // 여러 모양(카드섹션 · 슬롯머신 · 변신 · 무한 줌 · 크기가 다른 짤 · 벌집)은 patterns.js
-import { makePatterns } from './patterns.js?v=20261122f';   // 고치면 index.html 의 app.js?v= 와 같이 바꿈
+import { makePatterns } from './patterns.js?v=20261123b';   // 고치면 index.html 의 app.js?v= 와 같이 바꿈
 
 const CFG = {
   SHIFT: 0.45, OVERLAY: 0.22, NEAR: 4, REUSE: 6.0,          // 짤 고르기 · 색 맞추기 (파이썬과 같음)
   CELLS: 8000,                                               // 칸 수 (폰 메모리 생각해서 9,000 → 8,000)
   START_TILES: 22, T_CAM0: 0.5, T_CAM1: 5.6, T_END: 5.9,     // 처음 화면 가로 짤 칸 수 · 화면 빠지기 시작 · 끝 · 마지막 짤
   HOLD: 3.5, FLIGHT: 0.85, FPS: 16,                          // 끝 멈춤(초, 11-22 사용자: 여운 있게 1초 더) · 짤 하나 날아오는 시간 · 초당 장수
-  AREA: 860000, MAX_W: 1000, MAX_H: 1280,                    // 움짤 크기
+  AREA: 860000, MAX_W: 1000, MAX_H: 1280,                    // 그림 재료(AI) 움짤 크기 — 폰 그래픽 메모리 때문에 그대로
+  AREA_HI: 1280 * 1280, MAX_W_HI: 1280, MAX_H_HI: 1600,      // 짤로 만들기 · 다른 재료 움짤 크기 (11-23 사용자: 해상도 높여서 안 깨지게)
+  Q_LAST: 0.9,                                               // 끝 장면(오래 멈춰 있는 그림)만 따로 높은 화질로
+  SOFTS: [0, 0.85, 0.75, 0.65, 0.55, 0.45], Q_MIN: 0.54,  // 짤로 만들기: 움직이는 장면 화질이 Q_MIN 아래면 이 비율로 줄였다 늘려 부드럽게 (0 = 그대로)
   LIMIT: 19500000,                                           // 디시 20MB — 단위가 헷갈려 넉넉히 19.5MB
   MAX_SIDE: 1600,
 };
@@ -88,14 +91,18 @@ async function readPhoto(file) {
   return c;
 }
 
-function layout(photo, T) {
+const PX = Number(new URLSearchParams(location.search).get('px')) || 0;   // 시험용: ?px=1200 → 큰 움짤의 긴 쪽 크기
+const SOFT = Number(new URLSearchParams(location.search).get('soft')) || 0;   // 시험용: ?soft=0.6 → 움직이는 장면만 그 비율로 줄였다 늘려 부드럽게(용량↓)
+function layout(photo, T, big = true) {                     // big: 짤로 만들기 · 다른 재료 (그림 재료는 false)
   const W = photo.width, H = photo.height;
   const cols = clamp(Math.round(Math.sqrt(CFG.CELLS * W / H)), 30, 150);
   const rows = Math.max(12, Math.round(cols * H / W));
   const ar = cols / rows;
-  let VW = Math.sqrt(CFG.AREA * ar), VH = Math.sqrt(CFG.AREA / ar);
-  if (VW > CFG.MAX_W) { VW = CFG.MAX_W; VH = VW / ar; }
-  if (VH > CFG.MAX_H) { VH = CFG.MAX_H; VW = VH * ar; }
+  const AREA = !big ? CFG.AREA : PX ? PX * PX : CFG.AREA_HI;
+  const MW = !big ? CFG.MAX_W : PX || CFG.MAX_W_HI, MH = !big ? CFG.MAX_H : PX ? PX * 1.25 : CFG.MAX_H_HI;
+  let VW = Math.sqrt(AREA * ar), VH = Math.sqrt(AREA / ar);
+  if (VW > MW) { VW = MW; VH = VW / ar; }
+  if (VH > MH) { VH = MH; VW = VH * ar; }
   VW = Math.round(VW / 2) * 2; VH = Math.round(VH / 2) * 2;
   return { cols, rows, VW, VH, Wm: cols * T, Hm: rows * T };
 }
@@ -370,7 +377,7 @@ function muxWebP(frames, W, H, durs, hold) {
 // ───────── 이 폰 속도 재기 → 걸릴 시간 (사진 고르면 바로, 1초쯤)
 async function prepare(photo) {
   const A = await loadAssets();
-  const L = layout(photo, A.T), N = L.rows * L.cols;
+  const L = layout(photo, A.T), Llo = layout(photo, A.T, false), N = L.rows * L.cols;
   const cells = cellsOf(photo, L);
   tilePixels(A);
   await sleep0();
@@ -407,10 +414,13 @@ async function prepare(photo) {
   // 재 본 값 → 실제 시간 (PC 크롬 · CPU 4배 느리게 한 아이폰 방식으로 맞춤: 짤 고르기는 이웃 검사 때문에 1.85배, 저장은 실제가 더 빠름)
   const est = {
     load: 0, match: perCell * N * 1.85, compose: perRow * L.rows,
-    prep: 0.25 + N * 0.000015, probe: tEnc * 3.5 + tRender,
+    prep: 0.25 + N * 0.000015, probe: tEnc * 24 + tRender * 4,
+    calc: 0,                                                 // 다른 재료로 만들기: 짤 고르기 대신 그림 계산 (아래에서 채움 · total 에는 안 넣음)
     frames: FRAMES * (E.kind === 'native' ? (Math.max(tEnc * 0.6, tRender * 1.3) + 0.004) * 0.55 : (tEnc + tRender * 1.3) * 0.78),
   };
-  return { A, L, cells, E, est, total: Object.values(est).reduce((a, v) => a + v, 0) };
+  const total = Object.values(est).reduce((a, v) => a + v, 0);
+  est.calc = 1 + est.match * 0.4;                            // 다른 재료로 만들기의 그림 계산 어림 (기기 속도에 비례 · total 에는 안 넣음)
+  return { A, L, Llo, cells, E, est, total };
 }
 
 // 남은 시간 계산: 지금 단계는 실제 속도로, 뒤 단계는 잰 값으로
@@ -443,16 +453,18 @@ function makeTracker(est, show) {
 const PATTERNS = makePatterns({ CFG, canvas, clamp, free, mulberry32, pyramid, drawClipped, makePlan, makeRenderer, labInto, bestTile, now, sleep0 });
 
 // ───────── 전체 흐름
+const areaK = (p, spec) => (spec && spec.lo ? (p.Llo.VW * p.Llo.VH) / (p.L.VW * p.L.VH) : 1);   // 작은 움짤(그림 재료)은 저장 시간도 그만큼 짧게 어림
 async function build(prep, focusPhoto, show, opts = {}) {
   const t0 = now();
-  const { A, L, cells, E, est } = prep;
+  const { A, cells, E, est } = prep;
   const spec = PATTERNS[opts.pattern] || PATTERNS.assemble;
-  const tr = makeTracker({ ...est, frames: est.frames * (opts.estT || CFG.T_END) / CFG.T_END }, show);
+  const L = spec.lo ? prep.Llo : prep.L;                   // 그림 재료는 작은 움짤 (AI·폰 메모리)
+  const tr = makeTracker({ ...est, frames: est.frames * (opts.estT || CFG.T_END) / CFG.T_END * areaK(prep, spec), ...(spec.calc ? { match: est.calc, compose: 0 } : {}) }, show);
   const focus = [focusPhoto[0] * L.Wm / prep.photo.width, focusPhoto[1] * L.Hm / prep.photo.height];
   const ctx = { A, L, T: A.T, cells, photo: prep.photo, focus, text: opts.text, tr };
   let mos = null, R;
-  tr.stage('match', '칸마다 어울리는 짤 고르는 중…');
-  if (spec.layout) R = await spec.make(ctx);               // 크기가 다른 짤 · 벌집: 스스로 짤 고르고 그림
+  tr.stage('match', spec.calc ? '그림 계산하는 중…' : '칸마다 어울리는 짤 고르는 중…');
+  if (spec.layout) R = await spec.make(ctx);               // 크기가 다른 짤 · 벌집 · 그림 재료 · 다른 재료: 스스로 그림
   else {
     const grid = await match(cells.feat, A, L, (p) => tr.tick(p));
     tr.stage('compose', '모자이크 그리는 중…');
@@ -461,26 +473,42 @@ async function build(prep, focusPhoto, show, opts = {}) {
     R = spec.make({ ...ctx, mos, grid });
   }
   tr.stage('prep', '움짤 준비하는 중…');
+  const OW = R.W || L.VW, OH = R.H || L.VH;                 // 움짤 크기 (동그란 판처럼 모양이 정하면 그 크기)
   const n = Math.floor(R.T_END * CFG.FPS) + 2, dt = Math.round(1000 / CFG.FPS);
   const holdN = Math.max(0, Math.round(CFG.HOLD * CFG.FPS) - 1);   // 끝 멈춤 = 마지막 장면 + 같은 간격의 짧은 장면 holdN장 (muxWebP 참고)
   const durs = new Array(n).fill(dt);
+  let sc = null, up = null, scx = null, upx = null, softK = 0;
+  const soften = (f) => { if (!sc) return f; scx.drawImage(f, 0, 0, sc.width, sc.height); upx.drawImage(sc, 0, 0, up.width, up.height); return up; };
   try {
-    // 화질 고르기: 끝 · 가운데 · 앞 장면 크기의 평균으로 전체 크기를 어림 (모양마다 장면 무게가 달라서 세 장)
+    // 화질 고르기: 끝 장면과 고르게 고른 다섯 장면 크기의 평균으로 전체 크기를 어림
     tr.stage('probe', '20MB 안에 들어가게 화질 맞추는 중…');
-    let qi = 0;
     const lastF = R.finalFrame();
     const px = lastF.getContext('2d').getImageData(0, 0, 1, 1).data;   // 끝 멈춤 장면에 다시 칠할 왼쪽 위 점 색
     const probes = [];
-    for (const tt of [R.T_END + 1, R.T_END * 0.55, R.T_END * 0.15]) {
+    for (const tt of [R.T_END + 1, ...[0.1, 0.3, 0.5, 0.7, 0.9].map((u) => R.T_END * u)]) {   // 끝 + 고르게 다섯 장 (11-23: 세 장이면 처음이 빈 모양을 너무 무겁게 어림)
       R.reset();
-      const c2 = canvas(L.VW, L.VH); c2.getContext('2d', { alpha: false }).drawImage(R.render(tt), 0, 0); probes.push(c2);
+      const c2 = canvas(OW, OH); c2.getContext('2d', { alpha: false }).drawImage(R.render(tt), 0, 0); probes.push(c2);
     }
-    for (; qi < QS.length - 1; qi++) {
-      let s = 0;
-      for (const c2 of probes) s += (await E.enc(c2, QS[qi])).length;
+    const lastBytes = (await E.enc(probes[0], CFG.Q_LAST)).length;   // 끝 장면은 높은 화질로 따로 (11-23)
+    const fits = async (q) => {
+      let s = 0;                                              // 움직이는 장면 = 고르게 고른 다섯 장의 평균 (끝 장면은 lastBytes 로 따로 — 평균에 넣으면 늘 무겁게 어림됨, 11-23 실측)
+      for (const c2 of probes.slice(1)) s += (await E.enc(soften(c2), q)).length;
       tr.tick(0.5);
-      if (s / probes.length * n <= CFG.LIMIT * 0.95) break;
-    }
+      return lastBytes + s / (probes.length - 1) * (n - 1) <= CFG.LIMIT * 0.95;
+    };
+    const setSoft = (k) => {
+      free(sc, up); sc = up = null; softK = k;
+      if (!k) return;
+      sc = canvas(Math.max(2, Math.round(OW * k)), Math.max(2, Math.round(OH * k))); up = canvas(OW, OH);
+      scx = sc.getContext('2d'); upx = up.getContext('2d', { alpha: false }); scx.imageSmoothingQuality = 'high'; upx.imageSmoothingQuality = 'high';
+    };
+    // 짤로 만들기: 화질이 Q_MIN 아래로 떨어질 것 같으면 움직이는 장면만 필요한 만큼 부드럽게(줄였다 늘림) — 깍두기처럼 깨지는 것보다 나음 · 끝 장면은 그대로 또렷
+    const softs = spec.lo || spec.calc ? [0] : SOFT ? [SOFT] : CFG.SOFTS, qm = QS.indexOf(CFG.Q_MIN);
+    let ok = false;
+    for (const k of softs) { setSoft(k); if (await fits(QS[qm])) { ok = true; break; } }
+    let lo = ok ? 0 : qm + 1, hi = ok ? qm : QS.length - 1;   // 들어가는 가장 높은 화질 (QS 는 높은 순 · 반씩 좁혀 찾기)
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (await fits(QS[mid])) hi = mid; else lo = mid + 1; }
+    let qi = lo;
     free(...probes);
     const dot = canvas(1, 1), dx = dot.getContext('2d', { alpha: false });
     dx.fillStyle = `rgb(${px[0]},${px[1]},${px[2]})`; dx.fillRect(0, 0, 1, 1);
@@ -492,8 +520,8 @@ async function build(prep, focusPhoto, show, opts = {}) {
       R.reset();
       tr.stage('frames', pass ? '20MB가 넘어서 화질을 낮춰 다시 만드는 중…' : `움짤 만드는 중 0/${n}장`);
       for (let i = 0; i < n; i++) {
-        const f = R.render(i / CFG.FPS);
-        pend.push(E.enc(f, q).then((b) => { frames[i] = b; total += b.length; }));
+        const f = R.render(i / CFG.FPS), last = i === n - 1;
+        pend.push(E.enc(last ? f : soften(f), last ? Math.max(q, CFG.Q_LAST) : q).then((b) => { frames[i] = b; total += b.length; }));
         if (pend.length >= 3) await pend.shift();
         if (total > room) { over = true; break; }
         const x = (i + 1) / n;                                // 뒤 장면일수록 짤이 많아 오래 걸림 (재 보니 앞 0.7 : 뒤 1.3)
@@ -503,16 +531,16 @@ async function build(prep, focusPhoto, show, opts = {}) {
       await Promise.all(pend);
       if (!over && total <= room) {
         tr.tick(1, '파일로 묶는 중…');
-        const blob = muxWebP(frames, L.VW, L.VH, durs, hold);
+        const blob = muxWebP(frames, OW, OH, durs, hold);
         tr.end();
         const r2 = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, +v.toFixed(2)]));
-        return { blob, pattern: spec.name, w: L.VW, h: L.VH, frames: n + holdN, q, pass, enc: E.kind, cells: [L.cols, L.rows], sec: now() - t0, est: prep.total, times: r2(tr.times), ests: r2(est) };
+        return { blob, pattern: spec.name, w: OW, h: OH, soft: softK, frames: n + holdN, q, pass, enc: E.kind, cells: [L.cols, L.rows], sec: now() - t0, est: prep.total, times: r2(tr.times), ests: r2(est) };
       }
       if (qi >= QS.length - 1) throw new Error('20MB 안에 넣지 못했어요. 다른 사진으로 해 주세요.');
       qi = Math.min(QS.length - 1, qi + 2);                  // 넘으면 화질 낮춰 다시
     }
   } finally {
-    R.dispose(); free(mos);
+    R.dispose(); free(mos, sc, up);
   }
 }
 
@@ -530,32 +558,41 @@ const QP = new URLSearchParams(location.search);            // ?pattern=cards �
 // 모양 고르기 (벌집은 11-22 사용자 요청으로 화면에서 뺌 · 그림 느낌은 시안만 — patterns.js 에는 남겨 둠)
 // group: 'zzal' = 짤로 만들기 · 'art' = 그림으로 만들기(그림 AI 파일 하나를 같이 씀)
 const AI_NOTE = '그림 AI 파일(약 4MB)을 처음 한 번만 받아요(그림 재료끼리 같이 써요).';
+// 이름은 11-23 사용자 요청으로 다듬음: 띄어쓰기·가운뎃점 없는 짧은 이름 + '~요'로 끝나는 짧은 설명
+//   설명은 폰에서 한 줄(12자 안)로 · (변신 → 자리찾기 · 무한 줌 → 무한줌 · 크기가 다른 짤 → 쪼개기 · 연필·목탄 → 소묘 · 실 공예 → 실공예 · 한 줄 그림 → 한붓그리기 · 글자 초상화 → 글자그림 · 큐브 모자이크 → 큐브아트)
 const KINDS = [
-  { key: 'assemble', group: 'zzal', name: '모이기', desc: '짤이 사방에서 날아와 모여요', box: true, estT: CFG.T_END, hint: '점선 네모 안에서 시작해서 짤이 모이며 전체 사진이 돼요.' },
-  { key: 'cards', group: 'zzal', name: '카드섹션', desc: '얼굴부터 카드가 차례로 뒤집혀요', box: true, estT: CFG.T_END, hint: '점선 네모 안, 누른 곳부터 카드가 뒤집히며 전체 사진이 돼요.' },
-  { key: 'slot', group: 'zzal', name: '슬롯머신', desc: '줄마다 돌다가 하나씩 멈춰요', box: true, estT: CFG.T_END, hint: '점선 네모 안, 누른 곳 쪽 줄부터 멈추며 전체 사진이 돼요.' },
-  { key: 'morph', group: 'zzal', name: '변신', desc: '색깔별로 놓인 짤이 사진이 돼요', box: false, estT: 4.7, hint: '색깔별로 놓인 짤이 누른 곳부터 제자리를 찾아가요.' },
-  { key: 'droste', group: 'zzal', name: '무한 줌', desc: '사진 속 작은 사진으로 계속 들어가요', box: false, estT: 6.2, hint: '누른 곳은 가리지 않게 구석에 작은 사진을 넣어요.' },
-  { key: 'quad', group: 'zzal', name: '크기가 다른 짤', desc: '큰 짤이 쪼개지며 또렷해져요', box: false, estT: 4.2, hint: '누른 곳 둘레는 작은 짤로 또렷하게 만들어요.' },
-  { key: 'sketch', group: 'zzal', name: '그려지기', desc: '연필 스케치에 짤로 색칠해요', box: false, estT: 5.7, hint: '누른 곳부터 연필 선이 그려지고, 그 위에 짤로 색칠돼요.' },
-  { key: 'crayon', group: 'art', name: '크레파스', desc: '크레파스로 그린 그림이 돼요', box: false, estT: 5.3, hint: `누른 곳부터 테두리를 그리고 크레파스로 칠해요. ${AI_NOTE}` },
-  { key: 'watercolor', group: 'art', name: '수채화', desc: '맑게 번지는 수채화가 돼요', box: false, estT: 5.3, hint: `누른 곳부터 맑은 물감으로 칠해요. ${AI_NOTE}` },
-  { key: 'cpencil', group: 'art', name: '색연필', desc: '종이가 비치는 색연필 그림이 돼요', box: false, estT: 5.3, hint: `누른 곳부터 색연필로 칠해요. ${AI_NOTE}` },
-  { key: 'oil', group: 'art', name: '유화', desc: '물감을 두껍게 바른 유화가 돼요', box: false, estT: 5.3, hint: `누른 곳부터 물감을 두껍게 발라요. ${AI_NOTE}` },
-  { key: 'charcoal', group: 'art', name: '연필·목탄', desc: '연필과 목탄으로 그린 흑백 그림이 돼요', box: false, estT: 5.3, hint: `누른 곳부터 연필과 목탄으로 흑백 그림을 그려요. ${AI_NOTE}` },
-  { key: 'ink', group: 'art', name: '수묵화', desc: '한지에 먹으로 그린 그림이 돼요', box: false, estT: 5.3, hint: `누른 곳부터 먹으로 그려요. ${AI_NOTE}` },
+  { key: 'assemble', group: 'zzal', name: '모이기', desc: '짤이 날아와 모여요', box: true, estT: CFG.T_END, hint: '점선 네모 안에서 시작해서 짤이 모이며 전체 사진이 돼요.' },
+  { key: 'cards', group: 'zzal', name: '카드섹션', desc: '카드가 차례로 뒤집혀요', box: true, estT: CFG.T_END, hint: '점선 네모 안, 누른 곳부터 카드가 뒤집히며 전체 사진이 돼요.' },
+  { key: 'slot', group: 'zzal', name: '슬롯머신', desc: '줄마다 돌다가 멈춰요', box: true, estT: CFG.T_END, hint: '점선 네모 안, 누른 곳 쪽 줄부터 멈추며 전체 사진이 돼요.' },
+  { key: 'morph', group: 'zzal', name: '자리찾기', desc: '짤이 제자리를 찾아가요', box: false, estT: 4.7, hint: '색깔별로 놓인 짤이 누른 곳부터 제자리를 찾아가요.' },
+  { key: 'droste', group: 'zzal', name: '무한줌', desc: '끝없이 빨려 들어가요', box: false, estT: 6.2, hint: '누른 곳은 가리지 않게 구석에 작은 사진을 넣어요.' },
+  { key: 'quad', group: 'zzal', name: '쪼개기', desc: '큰 짤이 잘게 쪼개져요', box: false, estT: 4.2, hint: '누른 곳 둘레는 작은 짤로 또렷하게 만들어요.' },
+  { key: 'sketch', group: 'zzal', name: '그려지기', desc: '스케치에 짤로 칠해요', box: false, estT: 5.7, hint: '누른 곳부터 연필 선이 그려지고, 그 위에 짤로 색칠돼요.' },
+  { key: 'crayon', group: 'art', name: '크레파스', desc: '크레파스로 꾹꾹 칠해요', box: false, estT: 5.3, hint: `누른 곳부터 테두리를 그리고 크레파스로 칠해요. ${AI_NOTE}` },
+  { key: 'watercolor', group: 'art', name: '수채화', desc: '물감이 맑게 번져요', box: false, estT: 5.3, hint: `누른 곳부터 맑은 물감으로 칠해요. ${AI_NOTE}` },
+  { key: 'cpencil', group: 'art', name: '색연필', desc: '색연필로 곱게 칠해요', box: false, estT: 5.3, hint: `누른 곳부터 색연필로 칠해요. ${AI_NOTE}` },
+  { key: 'oil', group: 'art', name: '유화', desc: '물감을 두껍게 발라요', box: false, estT: 5.3, hint: `누른 곳부터 물감을 두껍게 발라요. ${AI_NOTE}` },
+  { key: 'charcoal', group: 'art', name: '소묘', desc: '연필과 목탄으로 그려요', box: false, estT: 5.3, hint: `누른 곳부터 연필과 목탄으로 흑백 그림을 그려요. ${AI_NOTE}` },
+  { key: 'ink', group: 'art', name: '수묵화', desc: '한지에 먹으로 그려요', box: false, estT: 5.3, hint: `누른 곳부터 먹으로 그려요. ${AI_NOTE}` },
+  { key: 'string', group: 'calc', name: '실공예', desc: '못 사이로 실을 감아요', box: false, estT: 5.5, hint: '누른 곳이 동그란 판 가운데에 오게 잘라요. 못 사이로 실이 한 줄씩 감기며 그림이 떠올라요.' },
+  { key: 'spiral', group: 'calc', name: '한붓그리기', desc: '펜을 떼지 않고 그려요', box: false, estT: 5.5, hint: '누른 곳이 동그란 판 가운데에 오게 잘라요. 가운데부터 선 하나가 감겨 나가며 그려져요.' },
+  { key: 'engrave', group: 'calc', name: '동판화', desc: '가는 선을 새겨 그려요', box: false, estT: 5.0, hint: '위에서부터 한 줄씩 가는 선이 새겨지며 지폐 그림 같은 판화가 돼요.' },
+  { key: 'letters', group: 'calc', name: '글자그림', desc: '글자로 빼곡히 그려요', box: false, estT: 5.75, hint: "누른 곳에 '고마워사랑해응원해'가 크게 써지고, 뒤로 물러나면 글자로 된 그림이 보여요." },
+  { key: 'cube', group: 'calc', name: '큐브아트', desc: '큐브를 맞춰 그려요', box: false, estT: 5.0, hint: '누른 곳부터 큐브가 하나씩 맞춰지며 그림이 돼요.' },
 ];
 const GROUPS = [
   { key: 'zzal', title: '짤로 만들기' },
   { key: 'art', title: '그림으로 만들기', note: '짤 대신 그림 AI가 그려요. 처음 한 번 4MB를 받아요.' },
+  { key: 'calc', title: '여러 재료로 만들기', note: '실·선·글자·큐브로 그려요. 짤도 AI도 안 써요.' },
 ];
-const EXV = '3';                                             // 예시 움짤(ex/) 버전 — 다시 만들면 바꿈 (11-22: 400px · 초당 16장 · 3: 그림 재료 5종 추가)
+const EXV = '4';                                             // 예시 움짤(ex/) 버전 — 다시 만들면 바꿈 (11-22: 400px · 초당 16장 · 3: 그림 재료 5종 추가)
 const qpKey = QP.get('pattern');                              // 화면에 없는 모양(시험 중 · 벌집)도 주소로는 열림
 let kind = KINDS.find((k) => k.key === qpKey)
   || (PATTERNS[qpKey] ? { key: qpKey, name: PATTERNS[qpKey].name, desc: '', box: false, estT: CFG.T_END, hint: '시험 중인 모양이에요.' } : KINDS[0]);
 let lastPrep = null;
 function guessText(p) {                                      // 모양마다 장수가 달라서 '움짤 만들기' 몫만 고쳐서 어림
-  const total = p.total + p.est.frames * (kind.estT / CFG.T_END - 1);
+  const spec = PATTERNS[kind.key], fr = p.est.frames * kind.estT / CFG.T_END * areaK(p, spec);
+  const total = p.total - p.est.frames + fr - (spec && spec.calc ? p.est.match + p.est.compose - p.est.calc : 0);
   return total < 10 ? '이 폰에서는 10초 안에 끝날 것 같아요' : `이 폰에서는 약 ${fmtSec(total)} 걸릴 것 같아요`;
 }
 function setKind(k) {
@@ -676,7 +713,7 @@ ui.make.addEventListener('click', async () => {
     ui.size.textContent = `${(r.blob.size / 1e6).toFixed(1)}MB · ${r.w}×${r.h} · 디시에 그대로 올릴 수 있어요`;
     const d = new Date(), p2 = (v) => String(v).padStart(2, '0');
     ui.save.href = lastURL; ui.save.download = `짤모자이크_${k.name.replace(/\s/g, '')}_${p2(d.getMonth() + 1)}${p2(d.getDate())}_${p2(d.getHours())}${p2(d.getMinutes())}.webp`;
-    window.__mosaic = { pattern: r.pattern, size: r.blob.size, w: r.w, h: r.h, frames: r.frames, q: r.q, pass: r.pass, enc: r.enc, cells: r.cells, sec: +r.sec.toFixed(1), est: +r.est.toFixed(1), times: r.times, ests: r.ests };
+    window.__mosaic = { pattern: r.pattern, size: r.blob.size, w: r.w, h: r.h, soft: r.soft, frames: r.frames, q: r.q, pass: r.pass, enc: r.enc, cells: r.cells, sec: +r.sec.toFixed(1), est: +r.est.toFixed(1), times: r.times, ests: r.ests };
     show(ui.stepDone);
   } catch (e) {
     console.error(e);
@@ -704,6 +741,7 @@ ui.make.addEventListener('click', async () => {
   } catch (e) { /* 띠는 없어도 됨 */ }
   // 변환 도구까지 미리 받아 둠 → 페이지가 열린 뒤엔 인터넷이 끊겨도(비행기 모드) 만들 수 있음
   try { await loadAssets(); await getEncoder(); } catch (e) { /* 사진 고를 때 다시 시도 */ }
+  for (const k of KINDS) if (k.group === 'calc') PATTERNS[k.key]?.prefetch?.().catch(() => { /* 고를 때 다시 시도 */ });
 })();
 
 show(ui.stepPick);
