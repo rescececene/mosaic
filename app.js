@@ -1,7 +1,7 @@
 // 짤 모자이크 — 모든 계산은 이 기기 브라우저 안에서만 (사진은 어디에도 안 올라감)
 // dc-stats/mosaic_build.py · mosaic_assemble.py 를 그대로 옮김 (짤 고르기 · 색 맞추기 · 모이는 연출)
 // 여러 모양(카드섹션 · 슬롯머신 · 변신 · 무한 줌 · 크기가 다른 짤 · 벌집)은 patterns.js
-import { makePatterns } from './patterns.js?v=20261123d';   // 고치면 index.html 의 app.js?v= 와 같이 바꿈
+import { makePatterns } from './patterns.js?v=20261123e';   // 고치면 index.html 의 app.js?v= 와 같이 바꿈
 
 const CFG = {
   SHIFT: 0.45, OVERLAY: 0.22, NEAR: 4, REUSE: 6.0,          // 짤 고르기 · 색 맞추기 (파이썬과 같음)
@@ -474,7 +474,7 @@ async function build(prep, focusPhoto, show, opts = {}) {
       tr.stage('compose', '모자이크 그리는 중…');
       mos = await compose(A, grid, L, prep.photo, cells.mean, (p) => tr.tick(p));
       await sleep0();
-      R = spec.make({ ...ctx, mos, grid });
+      R = await spec.make({ ...ctx, mos, grid });            // LP판처럼 따로 받는 모양은 비동기
     }
     tr.stage('prep', '움짤 준비하는 중…');
     const OW = R.W || L.VW, OH = R.H || L.VH;                 // 움짤 크기 (동그란 판처럼 모양이 정하면 그 크기)
@@ -571,6 +571,7 @@ const KINDS = [
   { key: 'droste', group: 'zzal', name: '무한줌', desc: '끝없이 빨려 들어가요', box: false, estT: 6.2, hint: '누른 곳은 가리지 않게 구석에 작은 사진을 넣어요.' },
   { key: 'quad', group: 'zzal', name: '쪼개기', desc: '큰 짤이 잘게 쪼개져요', box: false, estT: 4.2, hint: '누른 곳 둘레는 작은 짤로 또렷하게 만들어요.' },
   { key: 'sketch', group: 'zzal', name: '그려지기', desc: '스케치에 짤로 칠해요', box: false, estT: 5.7, hint: '누른 곳부터 연필 선이 그려지고, 그 위에 짤로 색칠돼요.' },
+  { key: 'lp', group: 'zzal', name: 'LP판', desc: '돌던 판이 멈추며 맞춰져요', box: false, estT: 5.6, hint: '누른 곳을 가운데로 LP판처럼 돌다가, 바깥 줄부터 하나씩 멈추며 사진이 맞춰져요.' },
   { key: 'crayon', group: 'art', name: '크레파스', desc: '크레파스로 꾹꾹 칠해요', box: false, estT: 5.3, hint: `누른 곳부터 테두리를 그리고 크레파스로 칠해요. ${AI_NOTE}` },
   { key: 'watercolor', group: 'art', name: '수채화', desc: '물감이 맑게 번져요', box: false, estT: 5.3, hint: `누른 곳부터 맑은 물감으로 칠해요. ${AI_NOTE}` },
   { key: 'cpencil', group: 'art', name: '색연필', desc: '색연필로 곱게 칠해요', box: false, estT: 5.3, hint: `누른 곳부터 색연필로 칠해요. ${AI_NOTE}` },
@@ -590,7 +591,7 @@ const GROUPS = [
   { key: 'art', title: '그림으로 만들기', note: '짤 대신 그림 AI가 그려요. 처음 한 번 AI 파일을 받아요(4~25MB).' },
   { key: 'calc', title: '여러 재료로 만들기', note: '실·선·글자·큐브로 그려요. 짤도 AI도 안 써요.' },
 ];
-const EXV = '5';                                             // 예시 움짤(ex/) 버전 — 다시 만들면 바꿈 (11-22: 400px · 초당 16장 · 3: 그림 재료 5종 추가)
+const EXV = '6';                                             // 예시 움짤(ex/) 버전 — 다시 만들면 바꿈 (11-22: 400px · 초당 16장 · 3: 그림 재료 5종 추가)
 const qpKey = QP.get('pattern');                              // 화면에 없는 모양(시험 중 · 벌집)도 주소로는 열림
 let kind = KINDS.find((k) => k.key === qpKey)
   || (PATTERNS[qpKey] ? { key: qpKey, name: PATTERNS[qpKey].name, desc: '', box: false, estT: CFG.T_END, hint: '시험 중인 모양이에요.' } : KINDS[0]);
@@ -756,7 +757,7 @@ ui.make.addEventListener('click', async () => {
   } catch (e) { /* 띠는 없어도 됨 */ }
   // 변환 도구까지 미리 받아 둠 → 페이지가 열린 뒤엔 인터넷이 끊겨도(비행기 모드) 만들 수 있음
   try { await loadAssets(); await getEncoder(); } catch (e) { /* 사진 고를 때 다시 시도 */ }
-  for (const k of KINDS) if (k.group === 'calc') PATTERNS[k.key]?.prefetch?.().catch(() => { /* 고를 때 다시 시도 */ });
+  for (const k of KINDS) if (k.group !== 'art') PATTERNS[k.key]?.prefetch?.().catch(() => { /* 고를 때 다시 시도 */ });   // 짤·여러 재료 쪽 따로 받는 파일(LP판 등)
 })();
 
 show(ui.stepPick);

@@ -900,13 +900,13 @@ export function makePatterns(H) {
   // ── 다른 재료로 만들기 (실 공예 · 한 줄 그림 · 동판화 · 글자 초상화 · 큐브 모자이크, 11-23): 짤도 AI도 없이 계산으로만
   //    모양마다 concepts/<이름>.js 를 처음 쓸 때 받음 (하나가 고장 나도 다른 모양은 그대로) · 페이지가 열리면 app.js 가 미리 받아 둠(비행기 모드용)
   //    m.make(c, K) → { T_END, render(t), reset(), finalFrame(), dispose(), W?, H? } — W·H 를 주면 그 크기로 움짤을 만듦 (동그란 판은 정사각형)
-  const CV = '20261123d';                                       // concepts/ 버전 — 고치면 app.js · patterns.js 버전과 같이 바꿈
+  const CV = '20261123e';                                       // concepts/ 버전 — 고치면 app.js · patterns.js 버전과 같이 바꿈
   const K = { CFG, canvas, clamp, free, mulberry32, now, sleep0, PI, easeIO, frameCanvas, boxBlur, smoothNoise, grayOf };
-  function concept(file, name, arg) {                         // arg: 한 파일에 모양이 여럿일 때 (illust.js 의 셀애니·목판화)
+  function concept(file, name, arg, zzal = false) {            // arg: 한 파일에 모양이 여럿일 때 (illust.js 의 셀애니·목판화) · zzal: 짤 모자이크(c.mos)를 받는 모양 (LP판)
     let modP = null;
     const load = () => modP || (modP = import(`./concepts/${file}.js?v=${CV}`).catch((e) => { modP = null; throw e; }));
     return {
-      name, layout: true, calc: true, prefetch: () => load().then((m) => m.prefetch?.(arg)),   // 모듈이 prefetch 를 내보내면 그것도 (AI 파일 미리 받기)
+      name, layout: !zzal, calc: !zzal, prefetch: () => load().then((m) => m.prefetch?.(arg)),   // 모듈이 prefetch 를 내보내면 그것도 (AI 파일 미리 받기)
       async make(c) {
         let m;
         try { m = await load(); } catch (e) { console.error(e); throw new Error('프로그램 파일을 받지 못했어요. 인터넷 연결을 확인해 주세요.'); }
@@ -918,6 +918,8 @@ export function makePatterns(H) {
   const letters = concept('letters', '글자 초상화'), cube = concept('cube', '큐브 모자이크');
   // 인물 일러스트 (11-23 사용자: 90년대 셀 애니 · 목판화): MediaPipe(Apache-2.0, vendor/mediapipe)로 부위·얼굴 점을 찾아 부위마다 그림 — concepts/illust.js
   const cel = concept('illust', '셀애니', 'cel'), woodcut = concept('illust', '목판화', 'woodcut');
+  // LP판 (11-23 사용자): 짤 모자이크가 LP판처럼 돌다가 바깥 줄부터 멈추며 사진이 맞춰짐 — concepts/lp.js
+  const lp = concept('lp', 'LP판', undefined, true);
 
-  return { assemble, cards, slot, morph, droste, quad, hex, sketch, paint, crayon, watercolor, cpencil, oil, charcoal, ink, string, spiral, engrave, letters, cube, cel, woodcut };
+  return { assemble, cards, slot, morph, droste, quad, hex, sketch, paint, crayon, watercolor, cpencil, oil, charcoal, ink, string, spiral, engrave, letters, cube, cel, woodcut, lp };
 }
