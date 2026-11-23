@@ -1,7 +1,7 @@
 // 짤 모자이크 — 모든 계산은 이 기기 브라우저 안에서만 (사진은 어디에도 안 올라감)
 // dc-stats/mosaic_build.py · mosaic_assemble.py 를 그대로 옮김 (짤 고르기 · 색 맞추기 · 모이는 연출)
 // 여러 모양(카드섹션 · 슬롯머신 · 변신 · 무한 줌 · 크기가 다른 짤 · 벌집)은 patterns.js
-import { makePatterns } from './patterns.js?v=20261123b';   // 고치면 index.html 의 app.js?v= 와 같이 바꿈
+import { makePatterns } from './patterns.js?v=20261123c';   // 고치면 index.html 의 app.js?v= 와 같이 바꿈
 
 const CFG = {
   SHIFT: 0.45, OVERLAY: 0.22, NEAR: 4, REUSE: 6.0,          // 짤 고르기 · 색 맞추기 (파이썬과 같음)
@@ -446,6 +446,7 @@ function makeTracker(est, show) {
     stage(name, label) { times[cur] = (times[cur] || 0) + now() - curT; cur = name; curT = now(); curP = 0; text = label; update(true); },
     tick(p, label) { curP = clamp(p, 0, 1); if (label) text = label; update(false); },
     end() { times[cur] = (times[cur] || 0) + now() - curT; },
+    label: () => text,
   };
 }
 
@@ -458,33 +459,32 @@ async function build(prep, focusPhoto, show, opts = {}) {
   const t0 = now();
   const { A, cells, E, est } = prep;
   const spec = PATTERNS[opts.pattern] || PATTERNS.assemble;
-  const L = spec.lo ? prep.Llo : prep.L;                   // 그림 재료는 작은 움짤 (AI·폰 메모리)
-  const tr = makeTracker({ ...est, frames: est.frames * (opts.estT || CFG.T_END) / CFG.T_END * areaK(prep, spec), ...(spec.calc ? { match: est.calc, compose: 0 } : {}) }, show);
+  const small = !!(spec.lo || opts.small);
+  const L = small ? prep.Llo : prep.L;                     // 그림 재료 · 메모리가 모자라 다시 할 때는 작은 움짤
+  const tr = makeTracker({ ...est, frames: est.frames * (opts.estT || CFG.T_END) / CFG.T_END * areaK(prep, { lo: small }), ...(spec.calc ? { match: est.calc, compose: 0 } : {}) }, show);
   const focus = [focusPhoto[0] * L.Wm / prep.photo.width, focusPhoto[1] * L.Hm / prep.photo.height];
   const ctx = { A, L, T: A.T, cells, photo: prep.photo, focus, text: opts.text, tr };
-  let mos = null, R;
-  tr.stage('match', spec.calc ? '그림 계산하는 중…' : '칸마다 어울리는 짤 고르는 중…');
-  if (spec.layout) R = await spec.make(ctx);               // 크기가 다른 짤 · 벌집 · 그림 재료 · 다른 재료: 스스로 그림
-  else {
-    const grid = await match(cells.feat, A, L, (p) => tr.tick(p));
-    tr.stage('compose', '모자이크 그리는 중…');
-    mos = await compose(A, grid, L, prep.photo, cells.mean, (p) => tr.tick(p));
-    await sleep0();
-    R = spec.make({ ...ctx, mos, grid });
-  }
-  tr.stage('prep', '움짤 준비하는 중…');
-  const OW = R.W || L.VW, OH = R.H || L.VH;                 // 움짤 크기 (동그란 판처럼 모양이 정하면 그 크기)
-  const n = Math.floor(R.T_END * CFG.FPS) + 2, dt = Math.round(1000 / CFG.FPS);
-  const holdN = Math.max(0, Math.round(CFG.HOLD * CFG.FPS) - 1);   // 끝 멈춤 = 마지막 장면 + 같은 간격의 짧은 장면 holdN장 (muxWebP 참고)
-  const durs = new Array(n).fill(dt);
-  let sc = null, up = null, scx = null, upx = null, softK = 0;
+  let mos = null, R = null, sc = null, up = null, scx = null, upx = null, softK = 0, probes = [];
   const soften = (f) => { if (!sc) return f; scx.drawImage(f, 0, 0, sc.width, sc.height); upx.drawImage(sc, 0, 0, up.width, up.height); return up; };
   try {
+    tr.stage('match', spec.calc ? '그림 계산하는 중…' : '칸마다 어울리는 짤 고르는 중…');
+    if (spec.layout) R = await spec.make(ctx);               // 크기가 다른 짤 · 벌집 · 그림 재료 · 다른 재료: 스스로 그림
+    else {
+      const grid = await match(cells.feat, A, L, (p) => tr.tick(p));
+      tr.stage('compose', '모자이크 그리는 중…');
+      mos = await compose(A, grid, L, prep.photo, cells.mean, (p) => tr.tick(p));
+      await sleep0();
+      R = spec.make({ ...ctx, mos, grid });
+    }
+    tr.stage('prep', '움짤 준비하는 중…');
+    const OW = R.W || L.VW, OH = R.H || L.VH;                 // 움짤 크기 (동그란 판처럼 모양이 정하면 그 크기)
+    const n = Math.floor(R.T_END * CFG.FPS) + 2, dt = Math.round(1000 / CFG.FPS);
+    const holdN = Math.max(0, Math.round(CFG.HOLD * CFG.FPS) - 1);   // 끝 멈춤 = 마지막 장면 + 같은 간격의 짧은 장면 holdN장 (muxWebP 참고)
+    const durs = new Array(n).fill(dt);
     // 화질 고르기: 끝 장면과 고르게 고른 다섯 장면 크기의 평균으로 전체 크기를 어림
     tr.stage('probe', '20MB 안에 들어가게 화질 맞추는 중…');
     const lastF = R.finalFrame();
     const px = lastF.getContext('2d').getImageData(0, 0, 1, 1).data;   // 끝 멈춤 장면에 다시 칠할 왼쪽 위 점 색
-    const probes = [];
     for (const tt of [R.T_END + 1, ...[0.1, 0.3, 0.5, 0.7, 0.9].map((u) => R.T_END * u)]) {   // 끝 + 고르게 다섯 장 (11-23: 세 장이면 처음이 빈 모양을 너무 무겁게 어림)
       R.reset();
       const c2 = canvas(OW, OH); c2.getContext('2d', { alpha: false }).drawImage(R.render(tt), 0, 0); probes.push(c2);
@@ -539,8 +539,11 @@ async function build(prep, focusPhoto, show, opts = {}) {
       if (qi >= QS.length - 1) throw new Error('20MB 안에 넣지 못했어요. 다른 사진으로 해 주세요.');
       qi = Math.min(QS.length - 1, qi + 2);                  // 넘으면 화질 낮춰 다시
     }
+  } catch (e) {
+    if (e && typeof e === 'object' && !e.where) e.where = tr.label();   // 어느 단계에서 멈췄는지 (오류 안내에 붙임 · 11-23)
+    throw e;
   } finally {
-    R.dispose(); free(mos, sc, up);
+    R?.dispose(); free(mos, sc, up, ...probes);
   }
 }
 
@@ -638,6 +641,7 @@ ui.exImg.addEventListener('error', () => { ui.ex.hidden = true; });   // 예시�
   setKind(kind);
 })();
 
+const memErr = (e) => !!e && (e.name === 'InvalidStateError' || e.name === 'RangeError' || /메모리|out of memory/i.test(e.message || ''));   // 사파리는 메모리가 모자라면 그림 읽기에서 InvalidStateError
 function show(step) { for (const s of [ui.stepPick, ui.stepAim, ui.stepWork, ui.stepDone]) s.hidden = s !== step; }
 function error(msg) { ui.err.textContent = msg; ui.err.hidden = !msg; }
 function fmtSec(s) {
@@ -703,10 +707,18 @@ ui.make.addEventListener('click', async () => {
     ui.work.textContent = text; ui.bar.style.width = (p * 100).toFixed(1) + '%';
     ui.eta.textContent = left == null ? '' : left < 3 ? '거의 다 됐어요' : left < 10 ? '곧 끝나요' : `약 ${fmtSec(left)} 남았어요`;
   };
+  const k = kind;
   try {
     const prep = await prepP;
-    const k = kind;
-    const r = await build(prep, focus, showP, { pattern: k.key, estT: k.estT });
+    let r;
+    try { r = await build(prep, focus, showP, { pattern: k.key, estT: k.estT }); }
+    catch (e) {                                              // 폰 메모리가 모자라 멈췄으면 한 번만 조금 작게 다시 (11-23 아이폰 그려지기)
+      if (!memErr(e) || PATTERNS[k.key]?.lo) throw e;
+      console.warn('메모리가 모자라 작게 다시 만듦', e);
+      showP('폰 메모리가 모자라서 조금 작게 다시 만드는 중…', 0, null);
+      await new Promise((res) => setTimeout(res, 400));    // 비운 그림 메모리를 폰이 돌려받을 틈
+      r = await build(prep, focus, showP, { pattern: k.key, estT: k.estT, small: true });
+    }
     if (lastURL) URL.revokeObjectURL(lastURL);
     lastURL = URL.createObjectURL(r.blob);
     ui.out.src = lastURL; ui.out.width = r.w; ui.out.height = r.h;
@@ -718,8 +730,9 @@ ui.make.addEventListener('click', async () => {
   } catch (e) {
     console.error(e);
     show(ui.stepAim); drawPreview(); showExample();
-    const msg = e && e.message ? e.message : '만들다가 멈췄어요.';
-    error(/주세요\.$/.test(msg) ? msg : msg + ' 다시 눌러 보세요.');   // 이미 '…주세요.' 로 끝나는 안내엔 덧붙이지 않음
+    const msg = e && e.message ? e.message : '만들다가 멈췄어요.', own = /주세요\.$/.test(msg);   // 이미 '…주세요.' 로 끝나는 안내엔 덧붙이지 않음
+    const tag = ` (${[k.name, e && e.where && e.where.replace(/…$/, ''), e && e.name].filter(Boolean).join(' · ')})`;   // 어디서 멈췄는지 — 알려 주시면 고치기 쉬움
+    error(memErr(e) ? '폰 메모리가 모자라서 멈췄어요. 다른 앱과 탭을 닫고 다시 눌러 보세요.' + tag : own ? msg : msg + ' 다시 눌러 보세요.' + tag);
   } finally {
     busy = false; try { await lock?.release(); } catch (e) { /* */ }
   }

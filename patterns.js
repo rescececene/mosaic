@@ -533,18 +533,33 @@ export function makePatterns(H) {
     name: '그려지기',
     make(c) {
       const { L, T, mos, photo } = c, { cols, rows, VW, VH } = L, P = VW * VH, N = cols * rows;
+      // 색칠할 그림부터: 짤 모자이크(큰 그림)를 화면 크기로 줄이고, 큰 그림은 바로 비움 (이 모양은 더 안 씀)
+      //   11-23 아이폰에서 10% 무렵 'The object is in an invalid state' — 큰 그림을 붙든 채 새 그림을 읽다가 메모리가 모자랐던 것으로 봄 → 먼저 비우고, 배열도 줄임
+      const col = canvas(VW, VH), cx = col.getContext('2d', { willReadFrequently: true });
+      cx.imageSmoothingQuality = 'high';
+      { const mosL = pyramid(mos, T, false); cx.drawImage(mosL[levelFor(mosL, L.Wm, VW)], 0, 0, VW, VH); free(...levelsOf(mosL).map((k) => mosL[k])); }
       const [frame, fx] = frameCanvas(L);
-      // 연필 그림: 회색 ÷ (1 − 흐린 반전) (흔한 연필 스케치 방식) → 선을 조금 진하게
-      const [gray] = grayOf(photo, VW, VH);
-      const inv = new Float32Array(P); for (let i = 0; i < P; i++) inv[i] = 255 - gray[i];
-      const bl = boxBlur(inv, VW, VH, Math.max(3, Math.round(VW / 110)));
-      const pencil = new Float32Array(P);
-      for (let i = 0; i < P; i++) { const den = 255 - bl[i], v = den <= 1 ? 255 : Math.min(255, gray[i] * 255 / den); pencil[i] = 255 * Math.pow(v / 255, 2.4); }
+      // 연필 그림: 회색 ÷ (1 − 흐린 반전) (흔한 연필 스케치 방식) → 선을 조금 진하게 (0~255 한 바이트씩)
+      const [gray] = grayOf(photo, VW, VH), pencil = new Uint8ClampedArray(P);
+      {
+        const inv = new Float32Array(P); for (let i = 0; i < P; i++) inv[i] = 255 - gray[i];
+        const bl = boxBlur(inv, VW, VH, Math.max(3, Math.round(VW / 110)));
+        for (let i = 0; i < P; i++) { const den = 255 - bl[i], v = den <= 1 ? 255 : Math.min(255, gray[i] * 255 / den); pencil[i] = 255 * Math.pow(v / 255, 2.4); }
+      }
+      // 색칠할 그림에 연필 선을 살짝 겹침
+      {
+        const ci = cx.getImageData(0, 0, VW, VH), cd = ci.data;
+        for (let i = 0, o = 0; i < P; i++, o += 4) { const m = 1 - 0.28 * (1 - pencil[i] / 255); cd[o] *= m; cd[o + 1] *= m; cd[o + 2] *= m; }
+        cx.putImageData(ci, 0, 0);
+      }
       // 선이 그려지는 시각: 얼굴에서 멀수록 늦게 + 얼룩 (조각조각 그려지는 느낌)
       const fpx = c.focus[0] / L.Wm * VW, fpy = c.focus[1] / L.Hm * VH;
       let dmax = 1; for (const [x, y] of [[0, 0], [VW, 0], [0, VH], [VW, VH]]) dmax = Math.max(dmax, Math.hypot(x - fpx, y - fpy));
-      const nz = smoothNoise(VW, VH, Math.max(18, Math.round(VW / 22)), 51), S0 = 0.15, S1 = 2.3, FADE = 0.3, tau = new Float32Array(P);
-      for (let y = 0; y < VH; y++) for (let x = 0; x < VW; x++) { const i = y * VW + x; tau[i] = S0 + (S1 - S0 - FADE) * (0.75 * Math.pow(Math.hypot(x - fpx, y - fpy) / dmax, 0.8) + 0.25 * nz[i]); }
+      const S0 = 0.15, S1 = 2.3, FADE = 0.3, tau = new Float32Array(P);
+      {
+        const nz = smoothNoise(VW, VH, Math.max(18, Math.round(VW / 22)), 51);
+        for (let y = 0; y < VH; y++) for (let x = 0; x < VW; x++) { const i = y * VW + x; tau[i] = S0 + (S1 - S0 - FADE) * (0.75 * Math.pow(Math.hypot(x - fpx, y - fpy) / dmax, 0.8) + 0.25 * nz[i]); }
+      }
       const paper = canvas(VW, VH), ppx = paper.getContext('2d'), pimg = ppx.createImageData(VW, VH), pdd = pimg.data;
       let paperT = -1;
       function drawPaper(t) {                                   // t 까지 그려진 연필 선
@@ -554,14 +569,6 @@ export function makePatterns(H) {
         for (let i = 0, o = 0; i < P; i++, o += 4) { const a = clamp((tt - tau[i]) / FADE, 0, 1), v = 255 - (255 - pencil[i]) * a; pdd[o] = pdd[o + 1] = pdd[o + 2] = v; pdd[o + 3] = 255; }
         ppx.putImageData(pimg, 0, 0);
       }
-      // 색칠할 그림: 짤 모자이크(화면 크기)에 연필 선을 살짝 겹침
-      const mosL = pyramid(mos, T, false), k0 = levelFor(mosL, L.Wm, VW);
-      const col = canvas(VW, VH), cx = col.getContext('2d', { willReadFrequently: true });
-      cx.imageSmoothingQuality = 'high'; cx.drawImage(mosL[k0], 0, 0, VW, VH);
-      const ci = cx.getImageData(0, 0, VW, VH), cd = ci.data;
-      for (let i = 0, o = 0; i < P; i++, o += 4) { const m = 1 - 0.28 * (1 - pencil[i] / 255); cd[o] *= m; cd[o + 1] *= m; cd[o + 2] *= m; }
-      cx.putImageData(ci, 0, 0);
-      free(...levelsOf(mosL).filter((k) => k > 1).map((k) => mosL[k]));
       // 칸마다 색칠되는 시각: 얼굴부터, 얼룩지게
       const cnz = smoothNoise(cols, rows, 4, 77), C0 = 2.0, C1 = 5.6, CF = 0.4, rho = new Float32Array(N);
       for (let i = 0; i < N; i++) { const x = ((i % cols) + 0.5) * VW / cols, y = (((i / cols) | 0) + 0.5) * VH / rows; rho[i] = C0 + (C1 - C0 - CF) * (0.7 * Math.pow(Math.hypot(x - fpx, y - fpy) / dmax, 0.8) + 0.3 * cnz[i]); }
