@@ -1,7 +1,7 @@
 // 짤 모자이크 — 모든 계산은 이 기기 브라우저 안에서만 (사진은 어디에도 안 올라감)
 // dc-stats/mosaic_build.py · mosaic_assemble.py 를 그대로 옮김 (짤 고르기 · 색 맞추기 · 모이는 연출)
 // 여러 모양(카드섹션 · 슬롯머신 · 변신 · 무한 줌 · 크기가 다른 짤 · 벌집)은 patterns.js
-import { makePatterns } from './patterns.js?v=20261123c';   // 고치면 index.html 의 app.js?v= 와 같이 바꿈
+import { makePatterns } from './patterns.js?v=20261123d';   // 고치면 index.html 의 app.js?v= 와 같이 바꿈
 
 const CFG = {
   SHIFT: 0.45, OVERLAY: 0.22, NEAR: 4, REUSE: 6.0,          // 짤 고르기 · 색 맞추기 (파이썬과 같음)
@@ -577,6 +577,8 @@ const KINDS = [
   { key: 'oil', group: 'art', name: '유화', desc: '물감을 두껍게 발라요', box: false, estT: 5.3, hint: `누른 곳부터 물감을 두껍게 발라요. ${AI_NOTE}` },
   { key: 'charcoal', group: 'art', name: '소묘', desc: '연필과 목탄으로 그려요', box: false, estT: 5.3, hint: `누른 곳부터 연필과 목탄으로 흑백 그림을 그려요. ${AI_NOTE}` },
   { key: 'ink', group: 'art', name: '수묵화', desc: '한지에 먹으로 그려요', box: false, estT: 5.3, hint: `누른 곳부터 먹으로 그려요. ${AI_NOTE}` },
+  { key: 'cel', group: 'art', name: '셀애니', desc: '90년대 만화처럼 그려요', box: false, estT: 5.5, hint: '얼굴을 찾아 눈·입을 새로 그리고, 선을 먼저 그린 뒤 색을 칠해요. 처음 한 번 얼굴 AI 파일(약 25MB)을 받아요.' },
+  { key: 'woodcut', group: 'art', name: '목판화', desc: '옛 목판화처럼 찍어요', box: false, estT: 5.5, hint: '먹선 판을 먼저 찍고 색 판을 하나씩 찍어요. 처음 한 번 얼굴 AI 파일(약 25MB)을 받아요.' },
   { key: 'string', group: 'calc', name: '실공예', desc: '못 사이로 실을 감아요', box: false, estT: 5.5, hint: '누른 곳이 동그란 판 가운데에 오게 잘라요. 못 사이로 실이 한 줄씩 감기며 그림이 떠올라요.' },
   { key: 'spiral', group: 'calc', name: '한붓그리기', desc: '펜을 떼지 않고 그려요', box: false, estT: 5.5, hint: '누른 곳이 동그란 판 가운데에 오게 잘라요. 가운데부터 선 하나가 감겨 나가며 그려져요.' },
   { key: 'engrave', group: 'calc', name: '동판화', desc: '가는 선을 새겨 그려요', box: false, estT: 5.0, hint: '위에서부터 한 줄씩 가는 선이 새겨지며 지폐 그림 같은 판화가 돼요.' },
@@ -585,10 +587,10 @@ const KINDS = [
 ];
 const GROUPS = [
   { key: 'zzal', title: '짤로 만들기' },
-  { key: 'art', title: '그림으로 만들기', note: '짤 대신 그림 AI가 그려요. 처음 한 번 4MB를 받아요.' },
+  { key: 'art', title: '그림으로 만들기', note: '짤 대신 그림 AI가 그려요. 처음 한 번 AI 파일을 받아요(4~25MB).' },
   { key: 'calc', title: '여러 재료로 만들기', note: '실·선·글자·큐브로 그려요. 짤도 AI도 안 써요.' },
 ];
-const EXV = '4';                                             // 예시 움짤(ex/) 버전 — 다시 만들면 바꿈 (11-22: 400px · 초당 16장 · 3: 그림 재료 5종 추가)
+const EXV = '5';                                             // 예시 움짤(ex/) 버전 — 다시 만들면 바꿈 (11-22: 400px · 초당 16장 · 3: 그림 재료 5종 추가)
 const qpKey = QP.get('pattern');                              // 화면에 없는 모양(시험 중 · 벌집)도 주소로는 열림
 let kind = KINDS.find((k) => k.key === qpKey)
   || (PATTERNS[qpKey] ? { key: qpKey, name: PATTERNS[qpKey].name, desc: '', box: false, estT: CFG.T_END, hint: '시험 중인 모양이에요.' } : KINDS[0]);
